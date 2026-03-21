@@ -1,4 +1,4 @@
-# Video Transcriber MCP Server
+# Media Transcriber MCP Server
 
 A powerful MCP (Model Context Protocol) server implemented in Rust that allows LLMs to transcribe local video and audio files into text. It uses the `whisper.cpp` engine (via `whisper-rs`) and `ffmpeg` for media processing, operating entirely locally for maximum privacy and performance.
 
@@ -8,7 +8,7 @@ A powerful MCP (Model Context Protocol) server implemented in Rust that allows L
 - **Universal Media Support:** Automatically handles video (mp4, mkv, avi, etc.) and audio (mp3, ogg, wav, flac, etc.) formats using `ffmpeg`.
 - **Zero Configuration:** The server boots instantly without any mandatory environment variables or flags.
 - **Automatic Model Acquisition:** If the Whisper model is missing, it will automatically download it (base model, ~140MB) during the first tool execution.
-- **Persistent Caching:** Models are stored in `~/.cache/video-transcriber-mcp/` to avoid redownloading across sessions.
+- **Persistent Caching:** Models are stored in `~/.cache/media-transcriber-mcp/` to avoid redownloading across sessions.
 - **Customizable:** Optionally specify a custom model path via the `WHISPER_MODEL_PATH` environment variable or the `--model-path` CLI flag.
 
 ## Requirements
@@ -20,8 +20,8 @@ A powerful MCP (Model Context Protocol) server implemented in Rust that allows L
 
 ```bash
 # Clone the repository
-git clone https://github.com/raultov/video-transcriber-mcp.git
-cd video-transcriber-mcp
+git clone https://github.com/raultov/media-transcriber-mcp.git
+cd media-transcriber-mcp
 
 # Install the binary globally
 cargo install --path .
@@ -34,8 +34,8 @@ Add the following to your `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "video-transcriber-mcp": {
-      "command": "video-transcriber-mcp",
+    "media-transcriber-mcp": {
+      "command": "media-transcriber-mcp",
       "args": []
     }
   }

@@ -29,7 +29,7 @@ pub fn get_or_download_model(provided_path: &Option<PathBuf>) -> Result<PathBuf>
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let cache_dir = PathBuf::from(home)
         .join(".cache")
-        .join("video-transcriber-mcp");
+        .join("media-transcriber-mcp");
     let cache_path = cache_dir.join("ggml-base.bin");
 
     if cache_path.exists() {

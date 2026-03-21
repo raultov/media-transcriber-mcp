@@ -1,12 +1,12 @@
 [package]
-name = "video-transcriber-mcp"
+name = "media-transcriber-mcp"
 version = "0.1.0"
 edition = "2024"
 authors = ["raultov <raultov@protonmail.com>"]
 description = "MCP server for transcribing local video and audio files using Whisper"
 license = "MIT"
-homepage = "https://github.com/raultov/video-transcriber-mcp"
-repository = "https://github.com/raultov/video-transcriber-mcp"
+homepage = "https://github.com/raultov/media-transcriber-mcp"
+repository = "https://github.com/raultov/media-transcriber-mcp"
 readme = "README.md"
 keywords = ["mcp", "whisper", "transcription", "audio", "video"]
 categories = ["multimedia::audio", "multimedia::video"]

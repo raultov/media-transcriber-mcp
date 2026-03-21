@@ -37,7 +37,7 @@ async fn main() -> SdkResult<()> {
         server_info: Implementation {
             name: env!("CARGO_PKG_NAME").into(),
             version: env!("CARGO_PKG_VERSION").into(),
-            title: Some("Video Transcriber MCP".into()),
+            title: Some("Media Transcriber MCP".into()),
             description: Some("Transcribes local audio and video files using whisper-rs".into()),
             icons: vec![],
             website_url: None,

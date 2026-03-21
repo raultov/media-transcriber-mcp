@@ -1054,6 +1054,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "media-transcriber-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "clap",
+ "hound",
+ "rust-mcp-sdk",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "whisper-rs",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2141,22 +2157,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "video-transcriber-mcp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "clap",
- "hound",
- "rust-mcp-sdk",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "whisper-rs",
-]
 
 [[package]]
 name = "want"
