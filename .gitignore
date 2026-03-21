@@ -1,0 +1,17 @@
+/target
+out.json
+out.err
+logs/
+*.html
+*.sh
+GEMINI.md
+*.png
+src/bin/
+proxy.json
+.gemini/
+
+# Media
+*.mp4
+*.mkv
+*.mp3
+*.ogg
