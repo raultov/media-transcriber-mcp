@@ -1,6 +1,6 @@
 [package]
 name = "media-transcriber-mcp"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["raultov <raultov@protonmail.com>"]
 description = "MCP server for transcribing local video and audio files using Whisper"
@@ -22,6 +22,7 @@ async-trait = "0.1"
 hound = "3.5.1"
 tempfile = "3.10.1"
 clap = { version = "4.6.0", features = ["derive", "env"] }
+base64 = "0.22.1"
 
 # The profile that 'dist' will build with
 [profile.dist]

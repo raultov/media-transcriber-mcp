@@ -29,3 +29,42 @@ pub fn convert_to_wav(input_path: &str) -> Result<tempfile::NamedTempFile> {
 
     Ok(temp_file)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn test_convert_to_wav_invalid_file() {
+        let result = convert_to_wav("non_existent_file.xyz_abc");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_convert_to_wav_valid_audio() {
+        // Create a dummy audio file using ffmpeg
+        let dummy_audio = tempfile::Builder::new().suffix(".mp3").tempfile().unwrap();
+        let status = Command::new("ffmpeg")
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=44100:cl=mono",
+                "-t",
+                "1",
+                "-y",
+                dummy_audio.path().to_str().unwrap(),
+            ])
+            .output()
+            .expect("Failed to execute ffmpeg for test setup");
+
+        if status.status.success() {
+            let result = convert_to_wav(dummy_audio.path().to_str().unwrap());
+            assert!(result.is_ok());
+            let converted = result.unwrap();
+            let metadata = std::fs::metadata(converted.path()).unwrap();
+            assert!(metadata.len() > 0);
+        }
+    }
+}

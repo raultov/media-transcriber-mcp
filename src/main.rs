@@ -1,15 +1,20 @@
 mod audio;
 mod transcriber;
 
+mod screenshot;
+
+use async_trait::async_trait;
 use clap::Parser;
 use rust_mcp_sdk::{
     error::SdkResult,
-    mcp_server::{McpServerOptions, server_runtime},
+    mcp_server::{McpServerOptions, ServerHandler, server_runtime},
     schema::*,
     *,
 };
 use std::path::PathBuf;
-use transcriber::TranscriberHandler;
+
+use crate::screenshot::{CaptureScreenshotTool, handle_capture_screenshot};
+use crate::transcriber::{TranscribeTool, handle_transcribe_media};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -23,10 +28,41 @@ struct Args {
     model_path: Option<PathBuf>,
 }
 
+pub struct AppHandler {
+    pub model_path: Option<PathBuf>,
+}
+
+#[async_trait]
+impl ServerHandler for AppHandler {
+    async fn handle_list_tools_request(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _runtime: std::sync::Arc<dyn McpServer>,
+    ) -> std::result::Result<ListToolsResult, RpcError> {
+        Ok(ListToolsResult {
+            tools: vec![TranscribeTool::tool(), CaptureScreenshotTool::tool()],
+            meta: None,
+            next_cursor: None,
+        })
+    }
+
+    async fn handle_call_tool_request(
+        &self,
+        params: CallToolRequestParams,
+        _runtime: std::sync::Arc<dyn McpServer>,
+    ) -> std::result::Result<CallToolResult, CallToolError> {
+        if params.name == "transcribe_media" {
+            handle_transcribe_media(self.model_path.as_deref(), params).await
+        } else if params.name == "capture_screenshot" {
+            handle_capture_screenshot(params).await
+        } else {
+            Err(CallToolError::unknown_tool(params.name))
+        }
+    }
+}
+
 // TODO in next versions:
-// - Add support for screenshots that add visual context to the transcription
 // - Add support for Youtube direct download and transcription
-// - Add Unit Tests
 
 #[tokio::main]
 async fn main() -> SdkResult<()> {
@@ -53,7 +89,7 @@ async fn main() -> SdkResult<()> {
 
     let transport = StdioTransport::new(TransportOptions::default())?;
     // Store the model_path but don't validate existence until the tool is called
-    let handler = TranscriberHandler {
+    let handler = AppHandler {
         model_path: args.model_path,
     }
     .to_mcp_server_handler();
