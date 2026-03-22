@@ -1,10 +1,18 @@
-# Media Transcriber MCP Server
+# Media Transcriber MCP
 
-A powerful MCP (Model Context Protocol) server implemented in Rust that allows LLMs to transcribe local video and audio files into text. It uses the `whisper.cpp` engine (via `whisper-rs`) and `ffmpeg` for media processing, operating entirely locally for maximum privacy and performance.
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](Cargo.toml)
+
+An MCP (Model Context Protocol) server that brings video parsing, transcription, and understanding to your AI assistant.
+
+> ✨ **New in v0.3.0**: Replaces local-only limitation. Now supports downloading directly from **YouTube** by passing either a URL or a search query! (Requires `yt-dlp`).
+> ✨ **New in v0.2.0**: Added the ability to take screenshots from videos at specific timestamps!
 
 ## Features
 
-- **High-Quality Transcription:** Uses OpenAI's Whisper model (GGML format) for accurate local transcription.
+- **Media Transcription**: Transcribes audio and video files (mp4, mkv, mp3, etc.) to text using Whisper.
+- **YouTube Support**: Pass a standard YouTube URL or search query and the MCP will automatically download the best audio format using `yt-dlp`.
+- **Screenshot Capture**: Takes screenshots from videos at specific timestamps to provide visual context to the LLM.
+- **Auto-Model Download**: Automatically downloads the necessary Whisper, fallback models don't require manual setup.
 - **Visual Context Extraction:** Captures screenshots directly from video files for the LLM to inspect charts, graphs, and slides (v0.2.0+).
 - **Universal Media Support:** Automatically handles video (mp4, mkv, avi, etc.) and audio (mp3, ogg, wav, flac, etc.) using `ffmpeg`.
 - **Zero Configuration:** The server boots instantly without any mandatory environment variables or flags.
@@ -17,31 +25,59 @@ A powerful MCP (Model Context Protocol) server implemented in Rust that allows L
 - **FFmpeg:** Must be installed on your system and available in your `PATH`.
 - **Rust (optional):** If you are compiling from source.
 
-## Installation
+## 🚀 Quick Start
 
+The easiest way to install and run the MCP Server natively is via Rust's Cargo or by downloading the pre-compiled binaries.
+
+### 1. Installation
+
+**Option A: Pre-compiled Binaries (Recommended)**
+Go to the [Releases](https://github.com/raultov/media-transcriber-mcp/releases) page and download the native executable for your platform (macOS, Windows, Linux). We provide `.msi` installers for Windows and shell scripts for UNIX systems.
+
+**Option B: Install via Cargo**
 ```bash
-# Clone the repository
-git clone https://github.com/raultov/media-transcriber-mcp.git
-cd media-transcriber-mcp
-
-# Install the binary globally
-cargo install --path .
+cargo install --git https://github.com/raultov/media-transcriber-mcp
 ```
 
-## Configuration for MCP Clients (e.g., Claude Desktop)
+**Option C: Install via Shell Script (Unix)**
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/raultov/media-transcriber-mcp/releases/latest/download/media-transcriber-mcp-installer.sh | sh
+```
 
-Add the following to your `claude_desktop_config.json`:
+### 2. Configure your MCP Client
+This server is fully tested and confirmed to work with **Claude Desktop**, **Gemini CLI**, and **ChatGPT (GPT) CLI**. Configure your AI client to execute the server using any of the following modes.
+
+#### **Universal Configuration (JSON)**
+Most MCP clients (like Claude Desktop or any JSON-based config) use this structure:
 
 ```json
 {
   "mcpServers": {
     "media-transcriber-mcp": {
       "command": "media-transcriber-mcp",
-      "args": []
+      "args": [],
+      "env": {}
     }
   }
 }
 ```
+
+#### **Gemini CLI**
+To add and activate the server in Gemini CLI:
+```bash
+gemini mcp add media-transcriber-mcp media-transcriber-mcp
+```
+Then, inside the Gemini CLI session, enable it:
+```bash
+/mcp enable media-transcriber-mcp
+```
+
+### 3. Usage
+
+Once connected, you can simply tell your LLM:
+> "Please transcribe this lecture: /home/user/Videos/meeting.mp4"
+
+The LLM will call the `transcribe_media` tool, and the server will return the full text content. If it needs to analyze a specific slide mentioned at 00:05:12, it can use the `capture_screenshot` tool to look at the visual data and provide a richer explanation.
 
 ## Available Tools
 
@@ -56,15 +92,19 @@ Captures a screenshot from a video file at a specific timestamp, returning it as
   - `video_path` (string, required): The absolute path to the video file.
   - `timestamp` (string, required): The timestamp (e.g., "00:01:23" or "123").
 
-## Usage in LLMs
+## Testing
 
-Once configured, you can simply tell your LLM:
-> "Please transcribe this lecture: /home/user/Videos/meeting.mp4"
+To run the unit tests for the project, use the standard Cargo test command:
 
-The LLM will call the `transcribe_media` tool, and the server will return the full text content. If it needs to analyze a specific slide mentioned at 00:05:12, it can use the `capture_screenshot` tool to look at the visual data and provide a richer explanation.
+```bash
+cargo test
+```
+
+This will execute the tests for audio conversion, model discovery, and other core components.
 
 ## Credits
 
 - Based on [rust-mcp-sdk](https://github.com/rust-mcp-stack/rust-mcp-sdk).
 - Powered by [whisper.cpp](https://github.com/ggerganov/whisper.cpp) via [whisper-rs](https://github.com/tazz4843/whisper-rs).
 - Media conversion by [FFmpeg](https://ffmpeg.org/).
+- YouTube downloads by [yt-dlp](https://github.com/yt-dlp/yt-dlp).

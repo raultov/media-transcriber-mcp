@@ -1,4 +1,5 @@
 mod audio;
+mod sources;
 mod transcriber;
 
 mod screenshot;
@@ -61,11 +62,39 @@ impl ServerHandler for AppHandler {
     }
 }
 
-// TODO in next versions:
-// - Add support for Youtube direct download and transcription
+fn check_dependencies() {
+    let mut missing = Vec::new();
+
+    if std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .is_err()
+    {
+        missing.push("ffmpeg");
+    }
+
+    if std::process::Command::new("yt-dlp")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        missing.push("yt-dlp");
+    }
+
+    if !missing.is_empty() {
+        eprintln!("ERROR: The following required dependencies are missing or not found in PATH:");
+        for dep in missing {
+            eprintln!("  - {}", dep);
+        }
+        eprintln!("Please install them before running media-transcriber-mcp.");
+        std::process::exit(1);
+    }
+}
 
 #[tokio::main]
 async fn main() -> SdkResult<()> {
+    check_dependencies();
+
     // Initialize without stopping the server if arguments are missing
     let args = Args::parse();
 

@@ -64,3 +64,69 @@ pub fn get_or_download_model(provided_path: &Option<PathBuf>) -> Result<PathBuf>
     eprintln!("Download complete.");
     Ok(cache_path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_provided_path_exists() {
+        let dir = tempdir().unwrap();
+        let model_path = dir.path().join("test-model.bin");
+        fs::write(&model_path, "dummy data").unwrap();
+
+        let result = get_or_download_model(&Some(model_path.clone()));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), model_path);
+    }
+
+    #[test]
+    fn test_provided_path_does_not_exist() {
+        let model_path = PathBuf::from("non-existent-path-1234.bin");
+        let result = get_or_download_model(&Some(model_path));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Provided WHISPER_MODEL_PATH does not exist")
+        );
+    }
+
+    #[test]
+    fn test_cache_discovery() {
+        // We can mock the HOME env var to test the cache discovery logic
+        let dir = tempdir().unwrap();
+        let old_home = std::env::var("HOME").ok();
+
+        // Set HOME to our temp dir
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
+
+        // Create the expected cache structure
+        let cache_dir = dir.path().join(".cache").join("media-transcriber-mcp");
+        fs::create_dir_all(&cache_dir).unwrap();
+        let model_path = cache_dir.join("ggml-base.bin");
+        fs::write(&model_path, "dummy cached model").unwrap();
+
+        // Should return the cached path
+        let result = get_or_download_model(&None);
+
+        // Restore HOME before assertions to prevent test interference if any
+        if let Some(h) = old_home {
+            unsafe {
+                std::env::set_var("HOME", h);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), model_path);
+    }
+}
