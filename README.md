@@ -1,10 +1,10 @@
 # Media Transcriber MCP
 
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](Cargo.toml)
 
 An MCP (Model Context Protocol) server that brings video parsing, transcription, and understanding to your AI assistant.
 
-> ✨ **New in v0.3.0**: Replaces local-only limitation. Now supports downloading directly from **YouTube** by passing either a URL or a search query! (Requires `yt-dlp`).
+> ✨ **New in v0.3.1**: Replaces local-only limitation. Now supports downloading directly from **YouTube** by passing either a URL or a search query! (Requires `yt-dlp`).
 > ✨ **New in v0.2.0**: Added the ability to take screenshots from videos at specific timestamps!
 
 ## Features
@@ -101,6 +101,15 @@ cargo test
 ```
 
 This will execute the tests for audio conversion, model discovery, and other core components.
+
+## Roadmap / TODOs
+
+- [ ] **Speaker Diarization**: Implement speaker recognition so the LLM knows *who* is speaking, not just what is being said.
+- [ ] **Multimodal Visual Sampling**: Automatically extract multiple key frames (e.g., based on scene changes) and send them to the LLM to provide a complete visual summary of the video.
+- [ ] **Native Translation & Subtitling**: Expose Whisper's robust translation feature to seamlessly return translated text or `.srt`/`.vtt` subtitles directly to the LLM.
+- [ ] **Hardware Acceleration (GPU) Support**: Add custom build flags and packages for native CUDA & Apple Metal support to provide instantaneous transcriptions.
+- [ ] **Streaming / Chunked Processing**: Implement pagination/streaming for transcriptions to prevent context window explosion on extremely long audio/video files.
+- [ ] **Support for More Sources**: Expand the integration to directly consume media from more URLs and platforms natively.
 
 ## Credits
 
