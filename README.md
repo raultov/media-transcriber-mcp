@@ -119,9 +119,9 @@ This will execute the tests for audio conversion, model discovery, and other cor
 - [x] **Speaker Diarization**: Implement speaker recognition so the LLM knows *who* is speaking, not just what is being said.
 - [x] **Multimodal Visual Sampling**: Automatically extract multiple key frames (e.g., based on scene changes) and send them to the LLM to provide a complete visual summary of the video.
 - [x] **Native Translation & Subtitling**: Expose Whisper's robust translation feature to seamlessly return translated text or `.srt` subtitles directly to the LLM.
-- [ ] **Hardware Acceleration (GPU) Support**: Add custom build flags and packages for native CUDA & Apple Metal support to provide instantaneous transcriptions.
 - [ ] **Streaming / Chunked Processing**: Implement pagination/streaming for transcriptions to prevent context window explosion on extremely long audio/video files.
 - [ ] **Support for More Sources**: Expand the integration to directly consume media from more URLs and platforms natively.
+- [ ] **Hardware Acceleration (GPU) Support**: Add custom build flags and packages for native CUDA & Apple Metal support to provide instantaneous transcriptions.
 
 ## Credits
 
