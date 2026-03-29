@@ -10,7 +10,7 @@ use crate::sources::youtube::{download_youtube_video, is_youtube_query};
 
 #[macros::mcp_tool(
     name = "capture_screenshot",
-    description = "Captures a screenshot from a video file at a specific timestamp. The LLM can use this to get visual context like graphs, slides, schemas in a technical talk."
+    description = "Captures a high-quality screenshot from a video at a specific timestamp. USE CASE: Once you have the 'srt' transcription and identified a key moment (like a specific slide, diagram, or code block), use this tool to 'see' the detail. It is the final step for deep technical verification."
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, macros::JsonSchema)]
 pub struct CaptureScreenshotTool {
@@ -22,7 +22,7 @@ pub struct CaptureScreenshotTool {
 
 #[macros::mcp_tool(
     name = "sample_video_scenes",
-    description = "Automatically extracts key frames from a video based on scene changes and returns them as images to provide a complete visual summary."
+    description = "Extracts multiple keyframes automatically based on visual scene changes. USE CASE: For technical talks, tutorials, or guides, use this IMMEDIATELY alongside 'transcribe_media' (text) to get a visual storyboard. This helps you understand the context of slides or demos without reading the whole video."
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, macros::JsonSchema)]
 pub struct SampleVideoScenesTool {

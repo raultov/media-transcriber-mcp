@@ -1,9 +1,10 @@
 # Media Transcriber MCP
 
-[![Version](https://img.shields.io/badge/version-0.4.2-blue.svg)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](Cargo.toml)
 
 An MCP (Model Context Protocol) server that brings video parsing, transcription, and understanding to your AI assistant.
 
+> ✨ **New in v0.5.0**: Added **Native Translation & Subtitling**! You can now ask the LLM to translate media directly to English using Whisper's native engine, or request clean plain-text output instead of SRT.
 > ✨ **New in v0.4.2**: Added **YouTube Subtitle Optimization**! For YouTube videos, the server now attempts to download official/auto-generated subtitles (SRT) first for near-instant results, falling back to Whisper only if necessary.
 > ✨ **New in v0.4.1**: Added **Multimodal Visual Sampling**! Use the `sample_video_scenes` tool to automatically extract keyframes based on scene changes and send them to the LLM for a complete visual summary.
 > ✨ **New in v0.4.0**: Added **Speaker Diarization**! The LLM now receives transcriptions segmented by speaker turns to provide better conversational context.
@@ -85,9 +86,11 @@ The LLM will call the `transcribe_media` tool, and the server will return the fu
 ## Available Tools
 
 ### `transcribe_media`
-Transcribes a local audio or video file to text.
+Transcribes a local audio or video file to text. Supports native translation and multiple output formats.
 - **Arguments:**
-  - `file_path` (string, required): The absolute path to the local media file.
+  - `file_path` (string, required): The absolute path to the local media file, YouTube URL, or search query.
+  - `task` (string, optional): The task to perform: `transcribe` (default) or `translate` (directly to English).
+  - `output_format` (string, optional): The format of the output: `srt` (default, with timestamps) or `text` (plain text).
 
 ### `capture_screenshot`
 Captures a screenshot from a video file at a specific timestamp, returning it as a Base64-encoded image.
@@ -115,7 +118,7 @@ This will execute the tests for audio conversion, model discovery, and other cor
 
 - [x] **Speaker Diarization**: Implement speaker recognition so the LLM knows *who* is speaking, not just what is being said.
 - [x] **Multimodal Visual Sampling**: Automatically extract multiple key frames (e.g., based on scene changes) and send them to the LLM to provide a complete visual summary of the video.
-- [ ] **Native Translation & Subtitling**: Expose Whisper's robust translation feature to seamlessly return translated text or `.srt`/`.vtt` subtitles directly to the LLM.
+- [x] **Native Translation & Subtitling**: Expose Whisper's robust translation feature to seamlessly return translated text or `.srt` subtitles directly to the LLM.
 - [ ] **Hardware Acceleration (GPU) Support**: Add custom build flags and packages for native CUDA & Apple Metal support to provide instantaneous transcriptions.
 - [ ] **Streaming / Chunked Processing**: Implement pagination/streaming for transcriptions to prevent context window explosion on extremely long audio/video files.
 - [ ] **Support for More Sources**: Expand the integration to directly consume media from more URLs and platforms natively.

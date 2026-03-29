@@ -25,7 +25,12 @@ pub fn format_srt_segment(index: usize, t0: i64, t1: i64, text: &str, speaker: &
     )
 }
 
-pub fn transcribe_audio(wav_path: &str, model_path: &Path) -> Result<String> {
+pub fn transcribe_audio(
+    wav_path: &str,
+    model_path: &Path,
+    task: &str,
+    output_format: &str,
+) -> Result<String> {
     let mut reader = hound::WavReader::open(wav_path)?;
     let samples: Vec<i16> = reader.samples::<i16>().map(|s| s.unwrap()).collect();
     let audio_data: Vec<f32> = samples.into_iter().map(|s| s as f32 / 32768.0).collect();
@@ -46,6 +51,11 @@ pub fn transcribe_audio(wav_path: &str, model_path: &Path) -> Result<String> {
     params.set_print_special(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
+
+    if task == "translate" {
+        params.set_translate(true);
+    }
+
     params.set_tdrz_enable(true); // Enable tinydiarize for speaker turns
 
     state
@@ -63,24 +73,37 @@ pub fn transcribe_audio(wav_path: &str, model_path: &Path) -> Result<String> {
             .full_get_segment_text(i)
             .map_err(|e| anyhow::anyhow!("Failed to get segment text: {}", e))?;
 
-        let t0 = state.full_get_segment_t0(i).unwrap_or(0);
-        let t1 = state.full_get_segment_t1(i).unwrap_or(0);
-
         let speaker_label = format!("Speaker {}", current_speaker);
-        result_text.push_str(&format_srt_segment(
-            (i + 1) as usize,
-            t0,
-            t1,
-            &segment,
-            &speaker_label,
-        ));
+
+        match output_format {
+            "text" => {
+                result_text.push_str(&segment);
+                result_text.push(' ');
+            }
+            "text_speakers" => {
+                result_text.push_str(&format!("[{}] {} ", speaker_label, segment.trim()));
+            }
+            _ => {
+                // Default to SRT
+                let t0 = state.full_get_segment_t0(i).unwrap_or(0);
+                let t1 = state.full_get_segment_t1(i).unwrap_or(0);
+
+                result_text.push_str(&format_srt_segment(
+                    (i + 1) as usize,
+                    t0,
+                    t1,
+                    &segment,
+                    &speaker_label,
+                ));
+            }
+        }
 
         if state.full_get_segment_speaker_turn_next(i) {
             current_speaker += 1;
         }
     }
 
-    Ok(result_text)
+    Ok(result_text.trim().to_string())
 }
 
 #[cfg(test)]
@@ -108,6 +131,8 @@ mod tests {
         let result = transcribe_audio(
             "non_existent_file.wav",
             &PathBuf::from("non_existent_model.bin"),
+            "transcribe",
+            "srt",
         );
         assert!(result.is_err());
     }

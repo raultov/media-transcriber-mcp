@@ -1,18 +1,26 @@
 use rust_mcp_sdk::{macros, schema::*};
 
-use crate::audio::{transcribe_audio, utils::convert_to_wav, whisper::get_or_download_model};
+use crate::audio::{
+    transcribe_audio,
+    utils::{clean_srt, convert_to_wav},
+    whisper::get_or_download_model,
+};
 use crate::sources::youtube::{
     download_youtube_audio, download_youtube_subtitles, is_youtube_query,
 };
 
 #[macros::mcp_tool(
     name = "transcribe_media",
-    description = "Transcribes a local audio/video file, a YouTube URL, or a YouTube search query to text. Optimization: For YouTube videos, it will first attempt to download official subtitles (SRT) for maximum speed. If unavailable, it falls back to full Whisper transcription."
+    description = "Transcribes media to text. PROTOCOL: 1. Start with 'output_format: text' (semantic only, most token-efficient). 2. If you need to track a conversation/debate, use 'text_speakers' (identifies WHO says what). 3. If it is a TECHNICAL talk/tutorial with slides/code, INFORM the user and switch to 'srt' (timestamps) to enable visual mapping with screenshots. 4. Use 'translate' task for non-English audio."
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, macros::JsonSchema)]
 pub struct TranscribeTool {
     /// Local path to the video/audio file, OR a YouTube URL, OR a search query
     pub file_path: String,
+    /// Task to perform: 'transcribe' (default) or 'translate' (directly to English)
+    pub task: Option<String>,
+    /// Format of the output: 'text' (pure semantics, default), 'text_speakers' (semantics + speakers), or 'srt' (full context with timestamps)
+    pub output_format: Option<String>,
 }
 
 pub async fn handle_transcribe_media(
@@ -23,14 +31,25 @@ pub async fn handle_transcribe_media(
     let args: TranscribeTool = serde_json::from_value(args_value)
         .map_err(|e| CallToolError::from_message(format!("Invalid arguments: {}", e)))?;
 
+    let task = args.task.unwrap_or_else(|| "transcribe".to_string());
+    let output_format = args.output_format.unwrap_or_else(|| "text".to_string());
+
     // Strategy 1: Attempt to download official subtitles for YouTube queries
-    if is_youtube_query(&args.file_path) {
+    // Optimization: If task is transcribe, we can use official subtitles even for text output
+    if is_youtube_query(&args.file_path) && task == "transcribe" {
         match download_youtube_subtitles(&args.file_path) {
             Ok(srt_path) => {
                 match std::fs::read_to_string(&srt_path) {
                     Ok(content) => {
-                        // If we successfully got subtitles, return them immediately
-                        return Ok(CallToolResult::text_content(vec![content.into()]));
+                        if output_format == "text" {
+                            // Instant results: clean SRT and return text
+                            return Ok(CallToolResult::text_content(vec![
+                                clean_srt(&content).into(),
+                            ]));
+                        } else if output_format == "srt" {
+                            // Instant results: return full SRT
+                            return Ok(CallToolResult::text_content(vec![content.into()]));
+                        }
                     }
                     Err(e) => {
                         eprintln!("Failed to read subtitle file at {:?}: {}", srt_path, e);
@@ -47,7 +66,6 @@ pub async fn handle_transcribe_media(
             }
         }
     }
-
     // Strategy 2: Full Whisper transcription (Fallback)
     // Download youtube audio if query matches
     let final_media_path = if is_youtube_query(&args.file_path) {
@@ -76,11 +94,84 @@ pub async fn handle_transcribe_media(
     };
 
     let wav_path = wav_file.path().to_str().unwrap();
-    match transcribe_audio(wav_path, &resolved_model_path) {
+    match transcribe_audio(wav_path, &resolved_model_path, &task, &output_format) {
         Ok(text) => Ok(CallToolResult::text_content(vec![text.into()])),
         Err(e) => Err(CallToolError::from_message(format!(
             "Transcription error: {}",
             e
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_transcribe_tool_deserialization() {
+        let json = json!({
+            "file_path": "test.mp4",
+            "task": "translate",
+            "output_format": "text"
+        });
+        let args: TranscribeTool = serde_json::from_value(json).unwrap();
+        assert_eq!(args.file_path, "test.mp4");
+        assert_eq!(args.task, Some("translate".to_string()));
+        assert_eq!(args.output_format, Some("text".to_string()));
+    }
+
+    #[test]
+    fn test_transcribe_tool_default_values() {
+        let json = json!({
+            "file_path": "test.mp4"
+        });
+        let args: TranscribeTool = serde_json::from_value(json).unwrap();
+        assert_eq!(args.file_path, "test.mp4");
+        assert_eq!(args.task, None);
+        assert_eq!(args.output_format, None);
+    }
+
+    #[tokio::test]
+    async fn test_handle_transcribe_invalid_args() {
+        let params = CallToolRequestParams {
+            name: "transcribe_media".to_string(),
+            arguments: Some(
+                json!({ "wrong_key": "value" })
+                    .as_object()
+                    .unwrap()
+                    .clone()
+                    .into_iter()
+                    .collect(),
+            ),
+            meta: None,
+            task: None,
+        };
+        let result = handle_transcribe_media(None, params).await;
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.0.to_string().contains("Invalid arguments"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_transcribe_non_existent_file() {
+        // This will pass Strategy 1 (not a youtube query) and fail later
+        let params = CallToolRequestParams {
+            name: "transcribe_media".to_string(),
+            arguments: Some(
+                json!({ "file_path": "/non/existent/file.mp4" })
+                    .as_object()
+                    .unwrap()
+                    .clone()
+                    .into_iter()
+                    .collect(),
+            ),
+            meta: None,
+            task: None,
+        };
+        let result = handle_transcribe_media(None, params).await;
+        // Should fail at convert_to_wav because file doesn't exist
+        assert!(result.is_err());
     }
 }

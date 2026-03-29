@@ -7,10 +7,23 @@ pub fn is_youtube_query(query: &str) -> bool {
         return true;
     }
     // If it's an existing file, it's a local file
-    if Path::new(query).exists() {
+    let path = Path::new(query);
+    if path.exists() {
         return false;
     }
-    // Consider as youtube search
+
+    // If it has a media extension but doesn't exist, it's a broken local path, not a youtube query
+    if let Some(ext) = path.extension() {
+        let ext = ext.to_string_lossy().to_lowercase();
+        if matches!(
+            ext.as_str(),
+            "mp4" | "mkv" | "avi" | "mov" | "mp3" | "wav" | "flac" | "ogg" | "m4a"
+        ) {
+            return false;
+        }
+    }
+
+    // Otherwise, treat as a youtube search query
     true
 }
 
