@@ -14,12 +14,13 @@ pub fn format_timestamp(t: i64) -> String {
     format!("{:02}:{:02}:{:02},{:03}", hrs, mins, secs, millis)
 }
 
-pub fn format_srt_segment(index: usize, t0: i64, t1: i64, text: &str) -> String {
+pub fn format_srt_segment(index: usize, t0: i64, t1: i64, text: &str, speaker: &str) -> String {
     format!(
-        "{}\n{} --> {}\n{}\n\n",
+        "{}\n{} --> {}\n[{}] {}\n\n",
         index,
         format_timestamp(t0),
         format_timestamp(t1),
+        speaker,
         text.trim()
     )
 }
@@ -45,6 +46,7 @@ pub fn transcribe_audio(wav_path: &str, model_path: &Path) -> Result<String> {
     params.set_print_special(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
+    params.set_tdrz_enable(true); // Enable tinydiarize for speaker turns
 
     state
         .full(params, &audio_data)
@@ -54,6 +56,8 @@ pub fn transcribe_audio(wav_path: &str, model_path: &Path) -> Result<String> {
         .full_n_segments()
         .map_err(|e| anyhow::anyhow!("Failed to get segments: {}", e))?;
     let mut result_text = String::new();
+    let mut current_speaker = 1;
+
     for i in 0..num_segments {
         let segment = state
             .full_get_segment_text(i)
@@ -62,7 +66,18 @@ pub fn transcribe_audio(wav_path: &str, model_path: &Path) -> Result<String> {
         let t0 = state.full_get_segment_t0(i).unwrap_or(0);
         let t1 = state.full_get_segment_t1(i).unwrap_or(0);
 
-        result_text.push_str(&format_srt_segment((i + 1) as usize, t0, t1, &segment));
+        let speaker_label = format!("Speaker {}", current_speaker);
+        result_text.push_str(&format_srt_segment(
+            (i + 1) as usize,
+            t0,
+            t1,
+            &segment,
+            &speaker_label,
+        ));
+
+        if state.full_get_segment_speaker_turn_next(i) {
+            current_speaker += 1;
+        }
     }
 
     Ok(result_text)
@@ -71,6 +86,7 @@ pub fn transcribe_audio(wav_path: &str, model_path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn test_format_timestamp() {
@@ -82,8 +98,17 @@ mod tests {
 
     #[test]
     fn test_format_srt_segment() {
-        let expected = "1\n00:00:01,500 --> 00:00:02,500\nHello world\n\n";
-        let segment = format_srt_segment(1, 150, 250, " Hello world ");
+        let expected = "1\n00:00:01,500 --> 00:00:02,500\n[Speaker 1] Hello world\n\n";
+        let segment = format_srt_segment(1, 150, 250, " Hello world ", "Speaker 1");
         assert_eq!(segment, expected);
+    }
+
+    #[test]
+    fn test_transcribe_audio_invalid_file() {
+        let result = transcribe_audio(
+            "non_existent_file.wav",
+            &PathBuf::from("non_existent_model.bin"),
+        );
+        assert!(result.is_err());
     }
 }

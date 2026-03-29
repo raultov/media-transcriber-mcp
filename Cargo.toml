@@ -1,6 +1,6 @@
 [package]
 name = "media-transcriber-mcp"
-version = "0.3.1"
+version = "0.4.2"
 edition = "2024"
 authors = ["raultov <raultov@protonmail.com>"]
 description = "MCP server for transcribing local video and audio files using Whisper"

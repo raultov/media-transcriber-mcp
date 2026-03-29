@@ -14,7 +14,9 @@ use rust_mcp_sdk::{
 };
 use std::path::PathBuf;
 
-use crate::screenshot::{CaptureScreenshotTool, handle_capture_screenshot};
+use crate::screenshot::{
+    CaptureScreenshotTool, SampleVideoScenesTool, handle_capture_screenshot, handle_sample_scenes,
+};
 use crate::transcriber::{TranscribeTool, handle_transcribe_media};
 
 #[derive(Parser, Debug)]
@@ -41,7 +43,11 @@ impl ServerHandler for AppHandler {
         _runtime: std::sync::Arc<dyn McpServer>,
     ) -> std::result::Result<ListToolsResult, RpcError> {
         Ok(ListToolsResult {
-            tools: vec![TranscribeTool::tool(), CaptureScreenshotTool::tool()],
+            tools: vec![
+                TranscribeTool::tool(),
+                CaptureScreenshotTool::tool(),
+                SampleVideoScenesTool::tool(),
+            ],
             meta: None,
             next_cursor: None,
         })
@@ -56,6 +62,8 @@ impl ServerHandler for AppHandler {
             handle_transcribe_media(self.model_path.as_deref(), params).await
         } else if params.name == "capture_screenshot" {
             handle_capture_screenshot(params).await
+        } else if params.name == "sample_video_scenes" {
+            handle_sample_scenes(params).await
         } else {
             Err(CallToolError::unknown_tool(params.name))
         }

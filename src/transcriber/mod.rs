@@ -1,11 +1,13 @@
 use rust_mcp_sdk::{macros, schema::*};
 
 use crate::audio::{transcribe_audio, utils::convert_to_wav, whisper::get_or_download_model};
-use crate::sources::youtube::{download_youtube_audio, is_youtube_query};
+use crate::sources::youtube::{
+    download_youtube_audio, download_youtube_subtitles, is_youtube_query,
+};
 
 #[macros::mcp_tool(
     name = "transcribe_media",
-    description = "Transcribes a local audio/video file, a YouTube URL, or a YouTube search query to text using Whisper. Supports mp4, mkv, mp3, ogg, etc."
+    description = "Transcribes a local audio/video file, a YouTube URL, or a YouTube search query to text. Optimization: For YouTube videos, it will first attempt to download official subtitles (SRT) for maximum speed. If unavailable, it falls back to full Whisper transcription."
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, macros::JsonSchema)]
 pub struct TranscribeTool {
@@ -21,6 +23,32 @@ pub async fn handle_transcribe_media(
     let args: TranscribeTool = serde_json::from_value(args_value)
         .map_err(|e| CallToolError::from_message(format!("Invalid arguments: {}", e)))?;
 
+    // Strategy 1: Attempt to download official subtitles for YouTube queries
+    if is_youtube_query(&args.file_path) {
+        match download_youtube_subtitles(&args.file_path) {
+            Ok(srt_path) => {
+                match std::fs::read_to_string(&srt_path) {
+                    Ok(content) => {
+                        // If we successfully got subtitles, return them immediately
+                        return Ok(CallToolResult::text_content(vec![content.into()]));
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to read subtitle file at {:?}: {}", srt_path, e);
+                        // Fall through to Whisper
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "Subtitles not found for YouTube query: {}. Falling back to Whisper. Error: {}",
+                    args.file_path, e
+                );
+                // Fall through to Whisper
+            }
+        }
+    }
+
+    // Strategy 2: Full Whisper transcription (Fallback)
     // Download youtube audio if query matches
     let final_media_path = if is_youtube_query(&args.file_path) {
         match download_youtube_audio(&args.file_path) {
