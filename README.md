@@ -5,15 +5,25 @@
 An MCP (Model Context Protocol) server that brings video parsing, transcription, and understanding to your AI assistant.
 
 > ✨ **New in v0.7.3**: Added **Instagram Support** and **Browser Cookies**! All three tools now accept Instagram URLs. You can now pass `browser_cookies: "chrome"` (or firefox, safari, edge) to authenticate with sites like Instagram or access private videos.
+>
 > ✨ **New in v0.7.2**: Added **Twitter/X Support**! All three tools (`transcribe_media`, `capture_screenshot`, `sample_video_scenes`) now accept Twitter and X URLs. The server auto-detects the source from the URL, or you can pass `source: "twitter"` explicitly.
+>
 > ✨ **New in v0.7.1**: Added **Reddit Support**! All three tools (`transcribe_media`, `capture_screenshot`, `sample_video_scenes`) now accept Reddit video URLs. The server auto-detects the source from the URL, or you can pass `source: "reddit"` explicitly.
+>
 > ✨ **New in v0.7.0**: Added **Vimeo Support**! All three tools (`transcribe_media`, `capture_screenshot`, `sample_video_scenes`) now accept Vimeo URLs. The server auto-detects the source from the URL, or you can pass `source: "vimeo"` explicitly.
+>
 > ✨ **New in v0.6.0**: Added **Streaming / Chunked Processing**! The `transcribe_media` tool now accepts `start_timestamp` and `duration_secs` parameters so the LLM can process long media files in manageable windows, preventing context window overflow.
+>
 > ✨ **New in v0.5.0**: Added **Native Translation & Subtitling**! You can now ask the LLM to translate media directly to English using Whisper's native engine, or request clean plain-text output instead of SRT.
+>
 > ✨ **New in v0.4.2**: Added **YouTube Subtitle Optimization**! For YouTube videos, the server now attempts to download official/auto-generated subtitles (SRT) first for near-instant results, falling back to Whisper only if necessary.
+>
 > ✨ **New in v0.4.1**: Added **Multimodal Visual Sampling**! Use the `sample_video_scenes` tool to automatically extract keyframes based on scene changes and send them to the LLM for a complete visual summary.
+>
 > ✨ **New in v0.4.0**: Added **Speaker Diarization**! The LLM now receives transcriptions segmented by speaker turns to provide better conversational context.
+>
 > ✨ **New in v0.3.1**: Replaces local-only limitation. Now supports downloading directly from **YouTube** by passing either a URL or a search query! (Requires `yt-dlp`).
+>
 > ✨ **New in v0.2.0**: Added the ability to take screenshots from videos at specific timestamps!
 
 ## Features
