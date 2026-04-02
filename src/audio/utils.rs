@@ -2,24 +2,33 @@ use anyhow::Result;
 use std::process::{Command, Stdio};
 use tempfile::Builder;
 
-pub fn convert_to_wav(input_path: &str) -> Result<tempfile::NamedTempFile> {
+pub fn convert_to_wav(
+    input_path: &str,
+    start_timestamp: Option<&str>,
+    duration_secs: Option<u64>,
+) -> Result<tempfile::NamedTempFile> {
     let temp_file = Builder::new().suffix(".wav").tempfile()?;
-    let status = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-i",
-            input_path,
-            "-ar",
-            "16000",
-            "-ac",
-            "1",
-            "-c:a",
-            "pcm_s16le",
-            temp_file.path().to_str().unwrap(),
-        ])
+
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-y");
+
+    // Seek *before* -i for fast input seeking (avoids decoding from the start)
+    if let Some(start) = start_timestamp {
+        cmd.args(["-ss", start]);
+    }
+
+    cmd.args(["-i", input_path]);
+
+    if let Some(dur) = duration_secs {
+        cmd.args(["-t", &dur.to_string()]);
+    }
+
+    cmd.args(["-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le"])
+        .arg(temp_file.path().to_str().unwrap())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
+        .stderr(Stdio::null());
+
+    let status = cmd.status()?;
 
     if !status.success() {
         return Err(anyhow::anyhow!(
@@ -73,13 +82,13 @@ mod tests {
 
     #[test]
     fn test_convert_to_wav_invalid_file() {
-        let result = convert_to_wav("non_existent_file.xyz_abc");
+        let result = convert_to_wav("non_existent_file.xyz_abc", None, None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_convert_to_wav_valid_audio() {
-        // Create a dummy audio file using ffmpeg
+        // Create a dummy audio file using ffmpeg (5 seconds of silence)
         let dummy_audio = tempfile::Builder::new().suffix(".mp3").tempfile().unwrap();
         let status = Command::new("ffmpeg")
             .args([
@@ -88,7 +97,7 @@ mod tests {
                 "-i",
                 "anullsrc=r=44100:cl=mono",
                 "-t",
-                "1",
+                "5",
                 "-y",
                 dummy_audio.path().to_str().unwrap(),
             ])
@@ -96,8 +105,40 @@ mod tests {
             .expect("Failed to execute ffmpeg for test setup");
 
         if status.status.success() {
-            let result = convert_to_wav(dummy_audio.path().to_str().unwrap());
+            let result = convert_to_wav(dummy_audio.path().to_str().unwrap(), None, None);
             assert!(result.is_ok());
+            let converted = result.unwrap();
+            let metadata = std::fs::metadata(converted.path()).unwrap();
+            assert!(metadata.len() > 0);
+        }
+    }
+
+    #[test]
+    fn test_convert_to_wav_with_chunking() {
+        // Create a dummy audio file using ffmpeg (10 seconds of silence)
+        let dummy_audio = tempfile::Builder::new().suffix(".mp3").tempfile().unwrap();
+        let status = Command::new("ffmpeg")
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=44100:cl=mono",
+                "-t",
+                "10",
+                "-y",
+                dummy_audio.path().to_str().unwrap(),
+            ])
+            .output()
+            .expect("Failed to execute ffmpeg for test setup");
+
+        if status.status.success() {
+            // Request only seconds 2–7 (start=2, duration=5)
+            let result = convert_to_wav(
+                dummy_audio.path().to_str().unwrap(),
+                Some("00:00:02"),
+                Some(5),
+            );
+            assert!(result.is_ok(), "Chunked WAV conversion failed");
             let converted = result.unwrap();
             let metadata = std::fs::metadata(converted.path()).unwrap();
             assert!(metadata.len() > 0);
