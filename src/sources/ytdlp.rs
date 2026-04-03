@@ -27,7 +27,7 @@ pub fn ytdlp_download_video(url: &str, browser_cookies: Option<&str>) -> Result<
 
     let mut cmd = Command::new("yt-dlp");
     cmd.arg("-f")
-        .arg("bestvideo[height<=720]+bestaudio/best[height<=720]")
+        .arg("bestvideo[height<=720][vcodec^=avc]+bestaudio/bestvideo[height<=720]+bestaudio/best[height<=720]/best")
         .arg("--merge-output-format")
         .arg("mp4")
         .arg("-o")

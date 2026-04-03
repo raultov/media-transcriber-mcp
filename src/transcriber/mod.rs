@@ -9,6 +9,7 @@ use crate::sources::instagram::{
     download_instagram_audio, download_instagram_subtitles, is_instagram_url,
 };
 use crate::sources::reddit::{download_reddit_audio, download_reddit_subtitles, is_reddit_url};
+use crate::sources::tiktok::{download_tiktok_audio, download_tiktok_subtitles, is_tiktok_url};
 use crate::sources::twitter::{download_twitter_audio, download_twitter_subtitles, is_twitter_url};
 use crate::sources::vimeo::{download_vimeo_audio, download_vimeo_subtitles, is_vimeo_url};
 use crate::sources::youtube::{
@@ -18,11 +19,11 @@ use crate::sources::ytdlp::parse_timestamp_to_secs;
 
 #[macros::mcp_tool(
     name = "transcribe_media",
-    description = "Transcribes media to text. PROTOCOL: 1. Start with 'output_format: text' (semantic only, most token-efficient). 2. If you need to track a conversation/debate, use 'text_speakers' (identifies WHO says what). 3. If it is a TECHNICAL talk/tutorial with slides/code, INFORM the user and switch to 'srt' (timestamps) to enable visual mapping with screenshots. 4. Use 'translate' task for non-English audio. SOURCES: pass a local path, a YouTube URL/search query, a Vimeo URL, a Reddit URL, a Twitter/X URL, or an Instagram URL (use 'source: reddit' etc. or let the server auto-detect from the URL). CHUNKING: For long media (>20 min), avoid context window overflow by transcribing in chunks: use 'start_timestamp' (e.g. '00:20:00' or '1200') and 'duration_secs' (e.g. 1200 for 20 min) to request one chunk at a time, then advance the window until done. AUTHENTICATION: For sites like Instagram or private videos, pass 'browser_cookies' (e.g., 'chrome', 'firefox')."
+    description = "Transcribes media to text. PROTOCOL: 1. Start with 'output_format: text' (semantic only, most token-efficient). 2. If you need to track a conversation/debate, use 'text_speakers' (identifies WHO says what). 3. If it is a TECHNICAL talk/tutorial with slides/code, INFORM the user and switch to 'srt' (timestamps) to enable visual mapping with screenshots. 4. Use 'translate' task for non-English audio. SOURCES: pass a local path, a YouTube URL/search query, a Vimeo URL, a Reddit URL, a Twitter/X URL, an Instagram URL, or a TikTok URL (use 'source: tiktok' etc. or let the server auto-detect from the URL). CHUNKING: For long media (>20 min), avoid context window overflow by transcribing in chunks: use 'start_timestamp' (e.g. '00:20:00' or '1200') and 'duration_secs' (e.g. 1200 for 20 min) to request one chunk at a time, then advance the window until done. AUTHENTICATION: For sites like Instagram or private videos, pass 'browser_cookies' (e.g., 'chrome', 'firefox')."
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, macros::JsonSchema)]
 pub struct TranscribeTool {
-    /// Local path to the video/audio file, a YouTube URL/search query, a Vimeo URL, a Reddit URL, a Twitter/X URL, or an Instagram URL
+    /// Local path to the video/audio file, a YouTube URL/search query, a Vimeo URL, a Reddit URL, a Twitter/X URL, an Instagram URL, or a TikTok URL
     pub file_path: String,
     /// Task to perform: 'transcribe' (default) or 'translate' (directly to English)
     pub task: Option<String>,
@@ -32,9 +33,9 @@ pub struct TranscribeTool {
     pub start_timestamp: Option<String>,
     /// Chunking: how many seconds to transcribe from start_timestamp. Omit to transcribe to the end.
     pub duration_secs: Option<u64>,
-    /// Optional source hint: 'youtube', 'vimeo', 'reddit', 'twitter', or 'instagram'. Auto-detected from the URL when omitted.
+    /// Optional source hint: 'youtube', 'vimeo', 'reddit', 'twitter', 'instagram', or 'tiktok'. Auto-detected from the URL when omitted.
     pub source: Option<String>,
-    /// Optional: Extract cookies from a browser for authentication (e.g., 'chrome', 'firefox', 'safari', 'edge'). Required for Instagram.
+    /// Optional: Extract cookies from a browser for authentication (e.g., 'chrome', 'firefox', 'safari', 'edge'). Required for Instagram, may be needed for TikTok.
     pub browser_cookies: Option<String>,
 }
 
@@ -45,19 +46,23 @@ enum MediaSource {
     Reddit,
     Twitter,
     Instagram,
+    TikTok,
     Local,
 }
 
 impl MediaSource {
     fn detect(file_path: &str, source_hint: Option<&str>) -> Self {
         match source_hint {
+            Some(s) if s.eq_ignore_ascii_case("tiktok") => MediaSource::TikTok,
             Some(s) if s.eq_ignore_ascii_case("instagram") => MediaSource::Instagram,
             Some(s) if s.eq_ignore_ascii_case("twitter") => MediaSource::Twitter,
             Some(s) if s.eq_ignore_ascii_case("reddit") => MediaSource::Reddit,
             Some(s) if s.eq_ignore_ascii_case("vimeo") => MediaSource::Vimeo,
             Some(s) if s.eq_ignore_ascii_case("youtube") => MediaSource::YouTube,
             _ => {
-                if is_instagram_url(file_path) {
+                if is_tiktok_url(file_path) {
+                    MediaSource::TikTok
+                } else if is_instagram_url(file_path) {
                     MediaSource::Instagram
                 } else if is_twitter_url(file_path) {
                     MediaSource::Twitter
@@ -99,6 +104,7 @@ pub async fn handle_transcribe_media(
             MediaSource::Reddit => Some(download_reddit_subtitles(&args.file_path, cookies)),
             MediaSource::Twitter => Some(download_twitter_subtitles(&args.file_path, cookies)),
             MediaSource::Instagram => Some(download_instagram_subtitles(&args.file_path, cookies)),
+            MediaSource::TikTok => Some(download_tiktok_subtitles(&args.file_path, cookies)),
             MediaSource::Local => None,
         };
 
@@ -167,6 +173,12 @@ pub async fn handle_transcribe_media(
                 Err(e) => return Err(CallToolError::from_message(e.to_string())),
             }
         }
+        MediaSource::TikTok => {
+            match download_tiktok_audio(&args.file_path, start_ts, duration, cookies) {
+                Ok(p) => p.to_string_lossy().to_string(),
+                Err(e) => return Err(CallToolError::from_message(e.to_string())),
+            }
+        }
         MediaSource::Local => args.file_path.clone(),
     };
 
@@ -227,6 +239,20 @@ mod tests {
     }
 
     #[test]
+    fn test_transcribe_tool_tiktok_source() {
+        let json = json!({
+            "file_path": "https://www.tiktok.com/@misbanojos/video/7616866375620906262",
+            "source": "tiktok"
+        });
+        let args: TranscribeTool = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            args.file_path,
+            "https://www.tiktok.com/@misbanojos/video/7616866375620906262"
+        );
+        assert_eq!(args.source, Some("tiktok".to_string()));
+    }
+
+    #[test]
     fn test_transcribe_tool_instagram_source() {
         let json = json!({
             "file_path": "https://www.instagram.com/reel/C72x942o0oG/",
@@ -248,6 +274,27 @@ mod tests {
         assert!(matches!(
             MediaSource::detect("https://www.youtube.com/watch?v=abc", None),
             MediaSource::YouTube
+        ));
+        // Auto-detect TikTok URL
+        assert!(matches!(
+            MediaSource::detect(
+                "https://www.tiktok.com/@mrbeast/video/7266155702008433953",
+                None
+            ),
+            MediaSource::TikTok
+        ));
+        // Auto-detect TikTok short URL (vm.tiktok.com)
+        assert!(matches!(
+            MediaSource::detect("https://vm.tiktok.com/ZMhABC123/", None),
+            MediaSource::TikTok
+        ));
+        // Explicit tiktok hint (case-insensitive)
+        assert!(matches!(
+            MediaSource::detect(
+                "https://www.tiktok.com/@mrbeast/video/7266155702008433953",
+                Some("TikTok")
+            ),
+            MediaSource::TikTok
         ));
         // Auto-detect Instagram URL
         assert!(matches!(

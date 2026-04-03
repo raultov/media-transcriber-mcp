@@ -8,39 +8,40 @@ use tempfile::Builder;
 
 use crate::sources::instagram::{download_instagram_video, is_instagram_url};
 use crate::sources::reddit::{download_reddit_video, is_reddit_url};
+use crate::sources::tiktok::{download_tiktok_video, is_tiktok_url};
 use crate::sources::twitter::{download_twitter_video, is_twitter_url};
 use crate::sources::vimeo::{download_vimeo_video, is_vimeo_url};
 use crate::sources::youtube::{download_youtube_video, is_youtube_query};
 
 #[macros::mcp_tool(
     name = "capture_screenshot",
-    description = "Captures a high-quality screenshot from a video at a specific timestamp. USE CASE: Once you have the 'srt' transcription and identified a key moment (like a specific slide, diagram, or code block), use this tool to 'see' the detail. It is the final step for deep technical verification. Supports local files, YouTube URLs/queries, Vimeo URLs, Reddit URLs, Twitter/X URLs, and Instagram URLs. AUTHENTICATION: For sites like Instagram or private videos, pass 'browser_cookies' (e.g., 'chrome', 'firefox')."
+    description = "Captures a high-quality screenshot from a video at a specific timestamp. USE CASE: Once you have the 'srt' transcription and identified a key moment (like a specific slide, diagram, or code block), use this tool to 'see' the detail. It is the final step for deep technical verification. Supports local files, YouTube URLs/queries, Vimeo URLs, Reddit URLs, Twitter/X URLs, Instagram URLs, and TikTok URLs. AUTHENTICATION: For sites like Instagram or private videos, pass 'browser_cookies' (e.g., 'chrome', 'firefox')."
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, macros::JsonSchema)]
 pub struct CaptureScreenshotTool {
-    /// Local path to the video file, a YouTube URL/search query, a Vimeo URL, a Reddit URL, a Twitter/X URL, or an Instagram URL
+    /// Local path to the video file, a YouTube URL/search query, a Vimeo URL, a Reddit URL, a Twitter/X URL, an Instagram URL, or a TikTok URL
     pub video_path: String,
     /// Timestamp to capture the screenshot at, e.g., "00:01:23" or "123" (seconds)
     pub timestamp: String,
-    /// Optional source hint: 'youtube', 'vimeo', 'reddit', 'twitter', or 'instagram'. Auto-detected from the URL when omitted.
+    /// Optional source hint: 'youtube', 'vimeo', 'reddit', 'twitter', 'instagram', or 'tiktok'. Auto-detected from the URL when omitted.
     pub source: Option<String>,
-    /// Optional: Extract cookies from a browser for authentication (e.g., 'chrome', 'firefox', 'safari', 'edge'). Required for Instagram.
+    /// Optional: Extract cookies from a browser for authentication (e.g., 'chrome', 'firefox', 'safari', 'edge'). Required for Instagram, may be needed for TikTok.
     pub browser_cookies: Option<String>,
 }
 
 #[macros::mcp_tool(
     name = "sample_video_scenes",
-    description = "Extracts multiple keyframes automatically based on visual scene changes. USE CASE: For technical talks, tutorials, or guides, use this IMMEDIATELY alongside 'transcribe_media' (text) to get a visual storyboard. This helps you understand the context of slides or demos without reading the whole video. Supports local files, YouTube URLs/queries, Vimeo URLs, Reddit URLs, Twitter/X URLs, and Instagram URLs. AUTHENTICATION: For sites like Instagram or private videos, pass 'browser_cookies' (e.g., 'chrome', 'firefox')."
+    description = "Extracts multiple keyframes automatically based on visual scene changes. USE CASE: For technical talks, tutorials, or guides, use this IMMEDIATELY alongside 'transcribe_media' (text) to get a visual storyboard. This helps you understand the context of slides or demos without reading the whole video. Supports local files, YouTube URLs/queries, Vimeo URLs, Reddit URLs, Twitter/X URLs, Instagram URLs, and TikTok URLs. AUTHENTICATION: For sites like Instagram or private videos, pass 'browser_cookies' (e.g., 'chrome', 'firefox')."
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, macros::JsonSchema)]
 pub struct SampleVideoScenesTool {
-    /// Local path to the video file, a YouTube URL/search query, a Vimeo URL, a Reddit URL, a Twitter/X URL, or an Instagram URL
+    /// Local path to the video file, a YouTube URL/search query, a Vimeo URL, a Reddit URL, a Twitter/X URL, an Instagram URL, or a TikTok URL
     pub video_path: String,
     /// Optional: Maximum number of frames to extract (default is 10)
     pub max_frames: Option<i32>,
-    /// Optional source hint: 'youtube', 'vimeo', 'reddit', 'twitter', or 'instagram'. Auto-detected from the URL when omitted.
+    /// Optional source hint: 'youtube', 'vimeo', 'reddit', 'twitter', 'instagram', or 'tiktok'. Auto-detected from the URL when omitted.
     pub source: Option<String>,
-    /// Optional: Extract cookies from a browser for authentication (e.g., 'chrome', 'firefox', 'safari', 'edge'). Required for Instagram.
+    /// Optional: Extract cookies from a browser for authentication (e.g., 'chrome', 'firefox', 'safari', 'edge'). Required for Instagram, may be needed for TikTok.
     pub browser_cookies: Option<String>,
 }
 
@@ -128,29 +129,38 @@ fn resolve_video_path(
     browser_cookies: Option<&str>,
 ) -> core::result::Result<String, CallToolError> {
     // Explicit source hint takes priority; otherwise auto-detect from URL.
-    let use_instagram = source_hint
-        .map(|s| s.eq_ignore_ascii_case("instagram"))
-        .unwrap_or_else(|| is_instagram_url(video_path));
+    let use_tiktok = source_hint
+        .map(|s| s.eq_ignore_ascii_case("tiktok"))
+        .unwrap_or_else(|| is_tiktok_url(video_path));
 
-    let use_twitter = !use_instagram
+    let use_instagram = !use_tiktok
+        && source_hint
+            .map(|s| s.eq_ignore_ascii_case("instagram"))
+            .unwrap_or_else(|| is_instagram_url(video_path));
+
+    let use_twitter = !use_tiktok
+        && !use_instagram
         && source_hint
             .map(|s| s.eq_ignore_ascii_case("twitter"))
             .unwrap_or_else(|| is_twitter_url(video_path));
 
-    let use_reddit = !use_instagram
+    let use_reddit = !use_tiktok
+        && !use_instagram
         && !use_twitter
         && source_hint
             .map(|s| s.eq_ignore_ascii_case("reddit"))
             .unwrap_or_else(|| is_reddit_url(video_path));
 
-    let use_vimeo = !use_instagram
+    let use_vimeo = !use_tiktok
+        && !use_instagram
         && !use_twitter
         && !use_reddit
         && source_hint
             .map(|s| s.eq_ignore_ascii_case("vimeo"))
             .unwrap_or_else(|| is_vimeo_url(video_path));
 
-    let use_youtube = !use_instagram
+    let use_youtube = !use_tiktok
+        && !use_instagram
         && !use_twitter
         && !use_reddit
         && !use_vimeo
@@ -158,7 +168,11 @@ fn resolve_video_path(
             .map(|s| s.eq_ignore_ascii_case("youtube"))
             .unwrap_or_else(|| is_youtube_query(video_path));
 
-    if use_instagram {
+    if use_tiktok {
+        download_tiktok_video(video_path, browser_cookies)
+            .map(|p| p.to_string_lossy().to_string())
+            .map_err(|e| CallToolError::from_message(e.to_string()))
+    } else if use_instagram {
         download_instagram_video(video_path, browser_cookies)
             .map(|p| p.to_string_lossy().to_string())
             .map_err(|e| CallToolError::from_message(e.to_string()))
