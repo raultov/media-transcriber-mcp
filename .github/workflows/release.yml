@@ -61,6 +61,15 @@ jobs:
     runs-on: "ubuntu-latest"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # Hand-added (kept by allow-dirty = ["ci"]): several tests build their
+      # fixtures with ffmpeg (a dummy mp3/video), and the runner image does not
+      # ship it. ffmpeg is a documented runtime requirement of the crate.
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: ffmpeg version
+        run: ffmpeg -version | head -1
       - name: make check
         run: make check
 
