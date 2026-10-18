@@ -1,0 +1,25 @@
+{
+  "name": "@raultov/media-transcriber-mcp",
+  "version": "0.7.4",
+  "description": "MCP server that transcribes, screenshots and samples video/audio with Whisper.",
+  "license": "MIT",
+  "homepage": "https://github.com/raultov/media-transcriber-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/raultov/media-transcriber-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/raultov/media-transcriber-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "whisper",
+    "transcription",
+    "audio",
+    "video",
+    "speech-to-text"
+  ],
+  "scripts": {
+    "prepublishOnly": "echo 'The npm package is built and published by cargo-dist; do not publish from the repo root.' && exit 1"
+  }
+}

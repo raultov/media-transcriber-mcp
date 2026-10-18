@@ -3,12 +3,19 @@ out.json
 out.err
 logs/
 *.html
+# Ad-hoc shell scripts stay out of the repo, but the project's own shell
+# sources must be tracked: release.yml runs .github/scripts/preflight.sh and
+# the Makefile's `e2e` target runs tests/run_all_e2e.sh.
 *.sh
+!.github/scripts/*.sh
+!tests/*.sh
 GEMINI.md
 *.png
 src/bin/
 proxy.json
 .gemini/
+# Local knot indexer state
+.knot/
 
 # Media
 *.mp4
