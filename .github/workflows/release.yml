@@ -44,6 +44,13 @@ on:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
 
+env:
+  # Portable x86_64 binaries: disable host CPU feature detection (-march=native)
+  # in whisper.cpp/ggml so binaries built on Intel Xeon runners (with AMX/AVX512)
+  # run on AMD Ryzen and older x86_64 CPUs without crashing with SIGILL.
+  GGML_NATIVE: "OFF"
+  WHISPER_NATIVE: "OFF"
+
 jobs:
   # Hand-added (kept by allow-dirty = ["ci"]): a tag whose version does not
   # match Cargo.toml/package.json, or without a CHANGELOG section, fails here,
@@ -144,6 +151,8 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/${{ join(matrix.targets, '-') }}-dist-manifest.json
+      GGML_NATIVE: "OFF"
+      WHISPER_NATIVE: "OFF"
     steps:
       - name: enable windows longpaths
         run: |
