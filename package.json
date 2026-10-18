@@ -1,6 +1,6 @@
 {
   "name": "@raultov/media-transcriber-mcp",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "MCP server that transcribes, screenshots and samples video/audio with Whisper.",
   "license": "MIT",
   "homepage": "https://github.com/raultov/media-transcriber-mcp",

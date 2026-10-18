@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 
+## [0.8.3] - 2026-10-18
+
+### Fixed
+- **CI release gate failure on clippy 1.99:** `clippy::double_must_use` (new in clippy 1.99) rejected the `#[async_trait::async_trait]` `ProgressSink::notify` because the macro already marks the future `#[must_use]`. `notify` now carries an explicit `#[must_use = "..."]` message that satisfies the lint without disabling it, keeping a strict, helpful error if the future is discarded.
+
+---
+
 ## [0.8.2] - 2026-10-18
 
 ### Fixed
