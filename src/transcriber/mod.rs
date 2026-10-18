@@ -264,10 +264,7 @@ fn whisper_lock() -> &'static tokio::sync::Mutex<()> {
 /// without spinning up a full [`rust_mcp_sdk::McpServer`] transport.
 #[async_trait::async_trait]
 pub trait ProgressSink: Send + Sync + 'static {
-    /// Forward a progress notification to the client. The returned future is
-    /// `#[must_use]` so a discarded notification is a compile-time warning.
-    #[must_use = "progress notifications must be awaited so the MCP client \
-                  keeps the tool call alive; use `.await`"]
+    /// Forward a progress notification to the client.
     async fn notify(&self, params: ProgressNotificationParams);
 }
 
