@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 
+## [0.8.1] - 2026-10-18
+
+### Fixed
+- **Portable x86_64 binaries (fix SIGILL on AMD Ryzen):** Disabled host CPU native instruction tuning (`GGML_NATIVE=OFF`, `WHISPER_NATIVE=OFF`) in `.cargo/config.toml` and CI workflows so binaries distributed via GitHub Releases, npm, and Homebrew compile with portable baseline AVX2/FMA instead of Intel Xeon-specific instructions (`AMX`) that crashed with `SIGILL` on AMD Ryzen CPUs (e.g. Ryzen 9 7950X).
+
+---
+
 ## [0.8.0] - 2026-10-18
 
 ### Added
@@ -135,6 +142,7 @@ Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 ### Added
 - Initial release: a Whisper-based MCP server exposing `transcribe_media` for local audio and video files.
 
+[0.8.1]: https://github.com/raultov/media-transcriber-mcp/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/raultov/media-transcriber-mcp/compare/v0.7.4...v0.8.0
 [0.7.4]: https://github.com/raultov/media-transcriber-mcp/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/raultov/media-transcriber-mcp/compare/v0.7.2...v0.7.3
