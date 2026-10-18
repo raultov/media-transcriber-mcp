@@ -33,6 +33,29 @@ pub struct TranscribeOptions<'a> {
     pub threads: i32,
     /// Silero VAD model; `None` disables VAD.
     pub vad_model_path: Option<&'a Path>,
+    /// Start offset in seconds when the WAV was trimmed from a longer file,
+    /// added to SRT segment timestamps so they match the original media.
+    pub start_offset_secs: u64,
+    /// Optional channel receiving decoding progress in percent (`0..=100`).
+    pub progress_sender: Option<tokio::sync::watch::Sender<i32>>,
+}
+
+/// Shifts a Whisper timestamp (in 10 ms ticks) by `start_offset_secs`.
+pub fn offset_timestamp_ticks(ticks: i64, start_offset_secs: u64) -> i64 {
+    let offset_ticks = i64::try_from(start_offset_secs)
+        .unwrap_or(i64::MAX / 100)
+        .saturating_mul(100);
+    ticks.saturating_add(offset_ticks)
+}
+
+/// Forwards a Whisper progress percentage into `tx` when it changes.
+pub(crate) fn report_progress(tx: &tokio::sync::watch::Sender<i32>, pct: i32) {
+    let clamped = pct.clamp(0, 100);
+    tx.send_if_modified(|current| {
+        let changed = *current != clamped;
+        *current = clamped;
+        changed
+    });
 }
 
 pub fn format_timestamp(t: i64) -> String {
@@ -141,7 +164,7 @@ pub fn transcribe_audio(
         .full(params, &audio_data)
         .map_err(|e| anyhow::anyhow!("Failed to run model: {e}"))?;
 
-    collect_segments(&state, opts.output_format)
+    collect_segments(&state, opts.output_format, opts.start_offset_secs)
 }
 
 /// Loads a WAV file as the float samples whisper.rs expects.
@@ -183,10 +206,17 @@ fn configure_params<'a>(params: &mut FullParams<'a, 'a>, opts: &TranscribeOption
         params.set_vad_params(WhisperVadParams::default());
         params.enable_vad(true);
     }
+    if let Some(tx) = opts.progress_sender.clone() {
+        params.set_progress_callback_safe(move |pct| report_progress(&tx, pct));
+    }
 }
 
 /// Renders the decoded segments in the requested output format.
-fn collect_segments(state: &whisper_rs::WhisperState, output_format: &str) -> Result<String> {
+fn collect_segments(
+    state: &whisper_rs::WhisperState,
+    output_format: &str,
+    start_offset_secs: u64,
+) -> Result<String> {
     let mut result_text = String::new();
     let mut current_speaker = 1;
 
@@ -206,10 +236,12 @@ fn collect_segments(state: &whisper_rs::WhisperState, output_format: &str) -> Re
                 result_text.push_str(&format!("[{speaker_label}] {} ", segment.trim()));
             }
             _ => {
+                let t0 = offset_timestamp_ticks(seg.start_timestamp(), start_offset_secs);
+                let t1 = offset_timestamp_ticks(seg.end_timestamp(), start_offset_secs);
                 result_text.push_str(&format_srt_segment(
                     seg.segment_index() as usize + 1,
-                    seg.start_timestamp(),
-                    seg.end_timestamp(),
+                    t0,
+                    t1,
                     &segment,
                     &speaker_label,
                 ));
@@ -254,6 +286,8 @@ mod tests {
             beam_size: 1,
             threads: 2,
             vad_model_path: None,
+            start_offset_secs: 0,
+            progress_sender: None,
         };
         let result = transcribe_audio(
             "non_existent_file.wav",
@@ -261,6 +295,27 @@ mod tests {
             &opts,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_offset_timestamp_ticks_shifts_srt_time() {
+        assert_eq!(offset_timestamp_ticks(150, 0), 150);
+        // 900 s (15 min) = 90_000 ticks of 10 ms.
+        let shifted_t0 = offset_timestamp_ticks(0, 900);
+        let shifted_t1 = offset_timestamp_ticks(250, 900);
+        assert_eq!(format_timestamp(shifted_t0), "00:15:00,000");
+        assert_eq!(format_timestamp(shifted_t1), "00:15:02,500");
+    }
+
+    #[test]
+    fn test_report_progress_clamps_and_updates_watch() {
+        let (tx, rx) = tokio::sync::watch::channel(0_i32);
+        report_progress(&tx, 42);
+        assert_eq!(*rx.borrow(), 42);
+        report_progress(&tx, 150);
+        assert_eq!(*rx.borrow(), 100);
+        report_progress(&tx, -10);
+        assert_eq!(*rx.borrow(), 0);
     }
 
     #[test]
