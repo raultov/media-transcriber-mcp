@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 
+## [0.8.3] - 2026-10-18
+
+### Fixed
+- **Release build failing on Rust 1.99:** `clippy::double_must_use` (new in clippy 1.99) rejected `ProgressSink::notify` because `async-trait` 0.1.89 adds a bare `#[must_use]` to every `async fn` in a trait, on top of the future that is already `#[must_use]`. Bumped `async-trait` to **0.1.92**, which no longer emits that attribute. Source code is unchanged and no lint is silenced. The 0.8.2 tag never got release binaries because of this; 0.8.3 replaces it.
+
+---
+
 ## [0.8.2] - 2026-10-18
 
 ### Fixed

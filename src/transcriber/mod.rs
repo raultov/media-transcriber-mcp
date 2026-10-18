@@ -264,6 +264,7 @@ fn whisper_lock() -> &'static tokio::sync::Mutex<()> {
 /// without spinning up a full [`rust_mcp_sdk::McpServer`] transport.
 #[async_trait::async_trait]
 pub trait ProgressSink: Send + Sync + 'static {
+    /// Forward a progress notification to the client.
     async fn notify(&self, params: ProgressNotificationParams);
 }
 
