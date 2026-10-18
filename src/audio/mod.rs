@@ -1,9 +1,39 @@
 pub mod utils;
 pub mod whisper;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
-use whisper_rs::{FullParams, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperVadParams,
+};
+
+/// Upper bound on decoder threads.
+///
+/// Whisper's decoder is memory-bandwidth bound: past this point extra threads
+/// only add contention. Measured on a 16-core/32-thread Ryzen 9 7950X, going
+/// from 16 to 32 threads made a 5-minute clip roughly **13x slower**.
+pub const MAX_THREADS: i32 = 16;
+
+/// Knobs for a single [`transcribe_audio`] call.
+///
+/// Grouped into a struct so the call site stays readable as options grow, and
+/// so new options do not push helpers past clippy's argument limit.
+pub struct TranscribeOptions<'a> {
+    /// `"transcribe"` or `"translate"` (Whisper translates to English).
+    pub task: &'a str,
+    /// `"text"`, `"text_speakers"` or `"srt"`.
+    pub output_format: &'a str,
+    /// ISO-639-1 code, or `"auto"` to detect per call from the first seconds.
+    pub language: &'a str,
+    /// Vocabulary hint: jargon, acronyms and proper nouns expected in the audio.
+    pub initial_prompt: Option<&'a str>,
+    /// Beam width. `1` selects greedy decoding.
+    pub beam_size: i32,
+    /// Decoder threads.
+    pub threads: i32,
+    /// Silero VAD model; `None` disables VAD.
+    pub vad_model_path: Option<&'a Path>,
+}
 
 pub fn format_timestamp(t: i64) -> String {
     let ms = t * 10;
@@ -25,55 +55,147 @@ pub fn format_srt_segment(index: usize, t0: i64, t1: i64, text: &str, speaker: &
     )
 }
 
+/// Default decoder thread count.
+///
+/// [`std::thread::available_parallelism`] reports **logical** CPUs, and SMT
+/// siblings hurt this workload, so the count is halved first (a no-op on CPUs
+/// without SMT) and then clamped to [`MAX_THREADS`].
+pub fn default_threads() -> i32 {
+    let logical = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let physical_estimate = (logical / 2).max(1);
+    (physical_estimate.min(MAX_THREADS as usize)) as i32
+}
+
+/// Normalizes a caller-supplied language tag.
+///
+/// `None`, `""` and `"auto"` all mean auto-detection. Anything else must be a
+/// short ASCII code so a typo cannot silently become part of the audio prompt.
+pub fn normalize_language(lang: Option<&str>) -> Result<String> {
+    let Some(raw) = lang else {
+        return Ok("auto".to_string());
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+        return Ok("auto".to_string());
+    }
+    if !trimmed.chars().all(|c| c.is_ascii_alphabetic()) || !(2..=3).contains(&trimmed.len()) {
+        anyhow::bail!("Invalid language code '{trimmed}': use a 2-3 letter ISO-639 code or 'auto'");
+    }
+    Ok(trimmed.to_ascii_lowercase())
+}
+
+/// Cleans a vocabulary hint before it reaches the decoder.
+///
+/// [`whisper_rs::FullParams::set_initial_prompt`] panics on interior NUL bytes,
+/// so they are stripped here and the call site never has to know.
+pub fn sanitize_prompt(prompt: &str) -> Option<String> {
+    let cleaned: String = prompt
+        .trim()
+        .chars()
+        .filter(|c| *c != '\0')
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+/// Beam search above one candidate, greedy otherwise.
+fn sampling_strategy(beam_size: i32) -> SamplingStrategy {
+    if beam_size > 1 {
+        SamplingStrategy::BeamSearch {
+            beam_size,
+            patience: -1.0,
+        }
+    } else {
+        SamplingStrategy::Greedy { best_of: 1 }
+    }
+}
+
+/// Transcribes 16 kHz mono PCM `wav_path` with `model_path`.
 pub fn transcribe_audio(
     wav_path: &str,
     model_path: &Path,
-    task: &str,
-    output_format: &str,
+    opts: &TranscribeOptions<'_>,
 ) -> Result<String> {
-    let mut reader = hound::WavReader::open(wav_path)?;
-    let samples: Vec<i16> = reader.samples::<i16>().map(|s| s.unwrap()).collect();
-    let audio_data: Vec<f32> = samples.into_iter().map(|s| s as f32 / 32768.0).collect();
+    let audio_data = read_wav_samples(wav_path)?;
 
-    let ctx = WhisperContext::new_with_params(
-        model_path.to_str().unwrap(),
-        WhisperContextParameters::default(),
-    )
-    .map_err(|e| anyhow::anyhow!("Failed to load model at {:?}: {}", model_path, e))?;
-
+    let model_str = model_path
+        .to_str()
+        .with_context(|| format!("Model path is not valid UTF-8: {model_path:?}"))?;
+    let ctx = WhisperContext::new_with_params(model_str, WhisperContextParameters::default())
+        .map_err(|e| anyhow::anyhow!("Failed to load model at {model_path:?}: {e}"))?;
     let mut state = ctx
         .create_state()
-        .map_err(|e| anyhow::anyhow!("Failed to create state: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to create state: {e}"))?;
 
-    let mut params = FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
-    params.set_language(Some("auto"));
-    params.set_print_progress(false);
-    params.set_print_special(false);
-    params.set_print_realtime(false);
-    params.set_print_timestamps(false);
-
-    if task == "translate" {
-        params.set_translate(true);
-    }
-
-    params.set_tdrz_enable(true); // Enable tinydiarize for speaker turns
+    let mut params = FullParams::new(sampling_strategy(opts.beam_size));
+    configure_params(&mut params, opts);
 
     state
         .full(params, &audio_data)
-        .map_err(|e| anyhow::anyhow!("Failed to run model: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to run model: {e}"))?;
 
-    let num_segments = state
-        .full_n_segments()
-        .map_err(|e| anyhow::anyhow!("Failed to get segments: {}", e))?;
+    collect_segments(&state, opts.output_format)
+}
+
+/// Loads a WAV file as the float samples whisper.rs expects.
+fn read_wav_samples(wav_path: &str) -> Result<Vec<f32>> {
+    let mut reader = hound::WavReader::open(wav_path)
+        .with_context(|| format!("Failed to open WAV file {wav_path}"))?;
+    let samples: Result<Vec<f32>, _> = reader
+        .samples::<i16>()
+        .map(|s| s.map(|v| f32::from(v) / 32768.0))
+        .collect();
+    samples.with_context(|| format!("Failed to read samples from {wav_path}"))
+}
+
+/// Applies the decoding options to a fresh parameter set.
+///
+/// The order of the VAD calls matters: whisper.cpp panics if `enable_vad` runs
+/// before the model path is set. The lifetimes are tied together because
+/// `FullParams` borrows the language and prompt strings for its whole life.
+fn configure_params<'a>(params: &mut FullParams<'a, 'a>, opts: &TranscribeOptions<'a>) {
+    params.set_language(Some(opts.language));
+    params.set_n_threads(opts.threads);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_special(false);
+    params.set_print_timestamps(false);
+    params.set_suppress_nst(true);
+    // tinydiarize only ships with the English `*-tdrz` models, so it is left
+    // off for every other format to avoid feeding a meaningless token in.
+    params.set_tdrz_enable(opts.output_format == "text_speakers");
+    params.set_translate(opts.task == "translate");
+
+    if let Some(prompt) = opts.initial_prompt {
+        params.set_initial_prompt(prompt);
+    }
+    if let Some(vad_path) = opts.vad_model_path
+        && let Some(vad_str) = vad_path.to_str()
+    {
+        params.set_vad_model_path(Some(vad_str));
+        params.set_vad_params(WhisperVadParams::default());
+        params.enable_vad(true);
+    }
+}
+
+/// Renders the decoded segments in the requested output format.
+fn collect_segments(state: &whisper_rs::WhisperState, output_format: &str) -> Result<String> {
     let mut result_text = String::new();
     let mut current_speaker = 1;
 
-    for i in 0..num_segments {
-        let segment = state
-            .full_get_segment_text(i)
-            .map_err(|e| anyhow::anyhow!("Failed to get segment text: {}", e))?;
+    for seg in state.as_iter() {
+        let segment = seg
+            .to_str_lossy()
+            .map_err(|e| anyhow::anyhow!("Failed to read segment text: {e}"))?;
 
-        let speaker_label = format!("Speaker {}", current_speaker);
+        let speaker_label = format!("Speaker {current_speaker}");
 
         match output_format {
             "text" => {
@@ -81,24 +203,20 @@ pub fn transcribe_audio(
                 result_text.push(' ');
             }
             "text_speakers" => {
-                result_text.push_str(&format!("[{}] {} ", speaker_label, segment.trim()));
+                result_text.push_str(&format!("[{speaker_label}] {} ", segment.trim()));
             }
             _ => {
-                // Default to SRT
-                let t0 = state.full_get_segment_t0(i).unwrap_or(0);
-                let t1 = state.full_get_segment_t1(i).unwrap_or(0);
-
                 result_text.push_str(&format_srt_segment(
-                    (i + 1) as usize,
-                    t0,
-                    t1,
+                    seg.segment_index() as usize + 1,
+                    seg.start_timestamp(),
+                    seg.end_timestamp(),
                     &segment,
                     &speaker_label,
                 ));
             }
         }
 
-        if state.full_get_segment_speaker_turn_next(i) {
+        if seg.next_segment_speaker_turn() {
             current_speaker += 1;
         }
     }
@@ -122,18 +240,87 @@ mod tests {
     #[test]
     fn test_format_srt_segment() {
         let expected = "1\n00:00:01,500 --> 00:00:02,500\n[Speaker 1] Hello world\n\n";
-        let segment = format_srt_segment(1, 150, 250, " Hello world ", "Speaker 1");
-        assert_eq!(segment, expected);
+        let actual = format_srt_segment(1, 150, 250, " Hello world ", "Speaker 1");
+        assert_eq!(actual, expected);
     }
 
     #[test]
     fn test_transcribe_audio_invalid_file() {
+        let opts = TranscribeOptions {
+            task: "transcribe",
+            output_format: "srt",
+            language: "auto",
+            initial_prompt: None,
+            beam_size: 1,
+            threads: 2,
+            vad_model_path: None,
+        };
         let result = transcribe_audio(
             "non_existent_file.wav",
             &PathBuf::from("non_existent_model.bin"),
-            "transcribe",
-            "srt",
+            &opts,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sampling_strategy_beam_vs_greedy() {
+        assert!(matches!(
+            sampling_strategy(1),
+            SamplingStrategy::Greedy { best_of: 1 }
+        ));
+        assert!(matches!(
+            sampling_strategy(5),
+            SamplingStrategy::BeamSearch { beam_size: 5, .. }
+        ));
+        // Zero and negatives fall back to greedy rather than underflowing.
+        assert!(matches!(
+            sampling_strategy(0),
+            SamplingStrategy::Greedy { .. }
+        ));
+    }
+
+    #[test]
+    fn test_normalize_language_defaults_to_auto() {
+        assert_eq!(normalize_language(None).unwrap(), "auto");
+        assert_eq!(normalize_language(Some("")).unwrap(), "auto");
+        assert_eq!(normalize_language(Some("   ")).unwrap(), "auto");
+        assert_eq!(normalize_language(Some("auto")).unwrap(), "auto");
+        assert_eq!(normalize_language(Some("AUTO")).unwrap(), "auto");
+    }
+
+    #[test]
+    fn test_normalize_language_lowercases_valid_codes() {
+        assert_eq!(normalize_language(Some("ES")).unwrap(), "es");
+        assert_eq!(normalize_language(Some(" eng ")).unwrap(), "eng");
+    }
+
+    #[test]
+    fn test_normalize_language_rejects_invalid() {
+        assert!(normalize_language(Some("spanish")).is_err());
+        assert!(normalize_language(Some("e")).is_err());
+        assert!(normalize_language(Some("es1")).is_err());
+        assert!(normalize_language(Some("españa")).is_err());
+    }
+
+    #[test]
+    fn test_sanitize_prompt_strips_nul_and_trims() {
+        assert_eq!(
+            sanitize_prompt("  WebMCP, knot.kz\0  ").as_deref(),
+            Some("WebMCP, knot.kz")
+        );
+    }
+
+    #[test]
+    fn test_sanitize_prompt_none_for_empty() {
+        assert_eq!(sanitize_prompt(""), None);
+        assert_eq!(sanitize_prompt("   "), None);
+        assert_eq!(sanitize_prompt("\0\0"), None);
+    }
+
+    #[test]
+    fn test_default_threads_within_bounds() {
+        let t = default_threads();
+        assert!((1..=MAX_THREADS).contains(&t), "threads out of range: {t}");
     }
 }
