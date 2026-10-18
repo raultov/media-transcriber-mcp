@@ -1,5 +1,8 @@
 use rust_mcp_sdk::{macros, schema::*};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+use tokio::sync::watch;
 
 use crate::audio::TranscribeOptions;
 use crate::audio::utils::{clean_srt, convert_to_wav};
@@ -238,6 +241,110 @@ fn resolve_media_path(req: &TranscribeRequest) -> std::result::Result<String, Ca
     }
 }
 
+/// Default interval between MCP progress heartbeats.
+///
+/// MCP clients such as `opencode` and `@modelcontextprotocol/sdk` enforce a
+/// 30–60 s per-call inactivity timeout with `resetTimeoutOnProgress: true`.
+/// Sending a progress notification every 5 s keeps long Whisper transcriptions
+/// and model downloads alive until completion.
+pub const PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Serializes Whisper model downloads and CPU-bound decoding across
+/// concurrent tool calls so parallel requests do not thrash SMT threads or
+/// race on `.part` downloads.
+static WHISPER_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+fn whisper_lock() -> &'static tokio::sync::Mutex<()> {
+    WHISPER_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+/// Receiver for MCP `notifications/progress` updates.
+///
+/// Abstracted behind a trait so unit tests can record emitted notifications
+/// without spinning up a full [`rust_mcp_sdk::McpServer`] transport.
+#[async_trait::async_trait]
+pub trait ProgressSink: Send + Sync + 'static {
+    async fn notify(&self, params: ProgressNotificationParams);
+}
+
+#[async_trait::async_trait]
+impl ProgressSink for Arc<dyn rust_mcp_sdk::McpServer> {
+    async fn notify(&self, params: ProgressNotificationParams) {
+        let _ = self.notify_progress(params).await;
+    }
+}
+
+/// Background task that emits `notifications/progress` while a tool call runs.
+///
+/// Aborts the background task automatically when dropped.
+pub struct ProgressGuard {
+    tx: watch::Sender<i32>,
+    handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl ProgressGuard {
+    /// Starts a heartbeat task when both `token` and `sink` are present.
+    pub fn start(
+        token: Option<ProgressToken>,
+        sink: Option<Arc<dyn ProgressSink>>,
+        interval_duration: Duration,
+    ) -> Self {
+        let (tx, rx) = watch::channel(0_i32);
+        let handle = match (token, sink) {
+            (Some(token), Some(sink)) => Some(tokio::spawn(run_progress_loop(
+                token,
+                sink,
+                rx,
+                interval_duration,
+            ))),
+            _ => None,
+        };
+        Self { tx, handle }
+    }
+
+    /// Returns a clone of the progress sender for [`TranscribeOptions`].
+    pub fn sender(&self) -> watch::Sender<i32> {
+        self.tx.clone()
+    }
+}
+
+impl Drop for ProgressGuard {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+async fn run_progress_loop(
+    token: ProgressToken,
+    sink: Arc<dyn ProgressSink>,
+    mut rx: watch::Receiver<i32>,
+    interval_duration: Duration,
+) {
+    let mut interval = tokio::time::interval(interval_duration);
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {}
+            changed = rx.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                interval.reset();
+            }
+        }
+        let pct = (*rx.borrow_and_update()).clamp(0, 100);
+        let params = ProgressNotificationParams {
+            progress_token: token.clone(),
+            progress: f64::from(pct),
+            total: Some(100.0),
+            message: Some(format!("Transcribing media ({pct}%)")),
+            meta: None,
+        };
+        sink.notify(params).await;
+    }
+}
+
 /// Converts to WAV and runs Whisper on a blocking thread.
 ///
 /// The Whisper decode runs for minutes and would otherwise stall the async
@@ -246,6 +353,7 @@ async fn transcribe_with_whisper(
     model_path: Option<&Path>,
     req: &TranscribeRequest,
     media_path: &str,
+    progress_sender: Option<watch::Sender<i32>>,
 ) -> std::result::Result<String, CallToolError> {
     // Local files are chunked by ffmpeg; remote ones were trimmed on download.
     let (ffmpeg_start, ffmpeg_duration) = match req.source {
@@ -256,10 +364,15 @@ async fn transcribe_with_whisper(
     let wav_file = convert_to_wav(media_path, ffmpeg_start, ffmpeg_duration)
         .map_err(|e| CallToolError::from_message(format!("Error converting to WAV: {e}")))?;
 
+    // Serialize model downloads and Whisper decoding so concurrent calls
+    // neither race on `.part` files nor spawn 32+ threads at once.
+    let _whisper_guard = whisper_lock().lock().await;
+
     let resolved_model = get_or_download_model(model_path, req.model, &default_cache_dir())
         .map_err(|e| CallToolError::from_message(e.to_string()))?;
 
     let vad_model = resolve_vad_model(req);
+    let start_offset_secs = req.start_ts.as_deref().map_or(0, parse_timestamp_to_secs);
 
     // Owned copies travel into the blocking closure; `TranscribeOptions` is
     // rebuilt there from them so the closure is `'static`.
@@ -279,6 +392,8 @@ async fn transcribe_with_whisper(
             beam_size,
             threads,
             vad_model_path: vad_model.as_deref(),
+            start_offset_secs,
+            progress_sender,
         };
         let wav_path = wav_file
             .path()
@@ -318,15 +433,18 @@ fn resolve_vad_model(req: &TranscribeRequest) -> Option<PathBuf> {
 pub async fn handle_transcribe_media(
     model_path: Option<&std::path::Path>,
     params: CallToolRequestParams,
+    sink: Option<Arc<dyn ProgressSink>>,
 ) -> std::result::Result<CallToolResult, CallToolError> {
+    let progress_token = params.meta.as_ref().and_then(|m| m.progress_token.clone());
     let req = parse_request(model_path, params)?;
+    let guard = ProgressGuard::start(progress_token, sink, PROGRESS_HEARTBEAT_INTERVAL);
 
     if let Some(result) = try_remote_subtitles(&req) {
         return Ok(result);
     }
 
     let media_path = resolve_media_path(&req)?;
-    let text = transcribe_with_whisper(model_path, &req, &media_path).await?;
+    let text = transcribe_with_whisper(model_path, &req, &media_path, Some(guard.sender())).await?;
     Ok(CallToolResult::text_content(vec![text.into()]))
 }
 
@@ -685,7 +803,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_transcribe_invalid_args() {
         let params = params_from(json!({ "wrong_key": "value" }));
-        let result = handle_transcribe_media(None, params).await;
+        let result = handle_transcribe_media(None, params, None).await;
         assert!(result.is_err());
         if let Err(e) = result {
             assert!(e.0.to_string().contains("Invalid arguments"));
@@ -695,14 +813,14 @@ mod tests {
     #[tokio::test]
     async fn test_handle_transcribe_non_existent_file() {
         let params = params_from(json!({ "file_path": "/non/existent/file.mp4" }));
-        let result = handle_transcribe_media(None, params).await;
+        let result = handle_transcribe_media(None, params, None).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_handle_transcribe_invalid_model() {
         let params = params_from(json!({ "file_path": "a.mp4", "model": "huge" }));
-        let result = handle_transcribe_media(None, params).await;
+        let result = handle_transcribe_media(None, params, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.0.to_string().contains("Unknown model 'huge'"));
@@ -711,7 +829,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_transcribe_invalid_language() {
         let params = params_from(json!({ "file_path": "a.mp4", "language": "spanish" }));
-        let result = handle_transcribe_media(None, params).await;
+        let result = handle_transcribe_media(None, params, None).await;
         assert!(result.is_err());
         assert!(
             result
@@ -720,5 +838,66 @@ mod tests {
                 .to_string()
                 .contains("Invalid language code")
         );
+    }
+
+    #[derive(Default)]
+    struct RecordingSink {
+        events: std::sync::Mutex<Vec<ProgressNotificationParams>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ProgressSink for RecordingSink {
+        async fn notify(&self, params: ProgressNotificationParams) {
+            self.events.lock().unwrap().push(params);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_progress_guard_emits_heartbeats_and_updates() {
+        let sink = Arc::new(RecordingSink::default());
+        let token = ProgressToken::from(7_i64);
+        let guard = ProgressGuard::start(
+            Some(token),
+            Some(sink.clone() as Arc<dyn ProgressSink>),
+            Duration::from_millis(20),
+        );
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        crate::audio::report_progress(&guard.sender(), 65);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        drop(guard);
+
+        let recorded = sink.events.lock().unwrap();
+        assert!(
+            !recorded.is_empty(),
+            "expected at least one progress notification"
+        );
+        assert_eq!(recorded[0].total, Some(100.0));
+        assert!(
+            recorded
+                .iter()
+                .any(|p| (p.progress - 65.0).abs() < f64::EPSILON),
+            "expected a 65% progress update, got {recorded:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_progress_guard_noop_without_token() {
+        let sink = Arc::new(RecordingSink::default());
+        let _guard = ProgressGuard::start(
+            None,
+            Some(sink.clone() as Arc<dyn ProgressSink>),
+            Duration::from_millis(10),
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(sink.events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_whisper_lock_serializes_concurrent_acquisitions() {
+        let first = whisper_lock().lock().await;
+        assert!(whisper_lock().try_lock().is_err());
+        drop(first);
+        assert!(whisper_lock().try_lock().is_ok());
     }
 }

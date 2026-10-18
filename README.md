@@ -203,7 +203,7 @@ Transcribes a local audio or video file to text. Supports native translation, mu
   - `output_format` (string, optional): The format of the output: `text` (plain text, default), `text_speakers` (with speaker turns), or `srt` (with timestamps).
   - `source` (string, optional): Source hint — `"youtube"`, `"vimeo"`, `"reddit"`, `"twitter"`, `"instagram"`, or `"tiktok"`. Auto-detected from the URL when omitted.
   - `browser_cookies` (string, optional): Extract cookies from a browser for authentication (e.g., `"chrome"`, `"firefox"`, `"safari"`, `"edge"`). **Required for Instagram**, may be needed for TikTok.
-  - `start_timestamp` (string, optional): Chunking — start offset for partial transcription (e.g. `"00:20:00"` or `"1200"`). Omit to start from the beginning.
+  - `start_timestamp` (string, optional): Chunking — start offset for partial transcription (e.g. `"00:20:00"` or `"1200"`). Omit to start from the beginning. When `output_format` is `"srt"`, segment timestamps are automatically offset by `start_timestamp` so they match the absolute time in the original media.
   - `duration_secs` (integer, optional): Chunking — how many seconds to transcribe from `start_timestamp`. Omit to transcribe to the end. For very long files (>20 min), use this together with `start_timestamp` to iterate in windows and avoid context window overflow.
   - `language` (string, optional): Spoken language ISO code (e.g. `"es"`, `"en"`). **Strongly recommended when known.** Defaults to `"auto"`, which re-detects the language on every call from the first seconds of audio and can get it wrong on silence or music.
   - `initial_prompt` (string, optional): Vocabulary hint — jargon, acronyms and proper nouns expected in the audio (e.g. `"WebMCP, knot.kz, chrome-debug, OpenCode"`). Whisper cannot guess terms it has never seen in context, so this is what makes technical talks come out readable.
@@ -241,7 +241,7 @@ The default is `large-v3-turbo-q5_0` because the small models replace words they
 
 A custom GGML model can be supplied with `WHISPER_MODEL_PATH` (or `--model-path`), which takes precedence over the `model` argument.
 
-**Threading.** The decoder uses half the logical CPU count, capped at 16. Whisper is memory-bandwidth bound and SMT siblings make it *slower*: measured on a 16-core/32-thread Ryzen 9 7950X, 16 threads took 104 s for a 5-minute clip while 32 threads took 768–1397 s.
+**Threading.** The decoder uses half the logical CPU count, capped at 16. Whisper is memory-bandwidth bound and SMT siblings make it *slower*: measured on a 16-core/32-thread Ryzen 9 7950X, 16 threads took 104 s for a 5-minute clip while 32 threads took 768–1397 s. Concurrent transcription calls are serialized internally and stream MCP `notifications/progress` updates (every 5 s and on decoder progress ticks) so parallel requests neither thrash CPU threads nor trigger MCP client inactivity timeouts.
 
 ## Tips for accurate transcription
 

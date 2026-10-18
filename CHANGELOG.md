@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 
+## [0.8.2] - 2026-10-18
+
+### Fixed
+- **MCP inactivity timeouts on long transcriptions:** MCP clients such as `opencode` and `@modelcontextprotocol/sdk` enforce a 30–60 s per-call inactivity timeout with `resetTimeoutOnProgress: true`. A 15-minute chunk with `large-v3-turbo-q5_0` takes several minutes to decode and was cut off before the result returned. The server now extracts `params.meta.progress_token` and streams `notifications/progress` every 5 s and on every `whisper-rs` progress tick (wired through `FullParams::set_progress_callback_safe`), so the client keeps the call alive until completion. The same heartbeat covers `capture_screenshot` and `sample_video_scenes` for their `yt-dlp` / `ffmpeg` invocations.
+- **SRT timestamps were wrong for chunked transcriptions:** when chunking long media with `start_timestamp` + `duration_secs`, `ffmpeg` trims the WAV to start at `00:00:00` and Whisper's segment timestamps were relative to the chunk instead of the source video. The SRT output now offsets every segment by `start_timestamp` so timestamps match the absolute time in the original media.
+
+### Changed
+- **Concurrent Whisper decodes are serialised:** parallel tool calls now go through a process-wide `tokio::sync::Mutex`, so the second call no longer spawns another 16+ threads on top of the first (32 threads made a 5-minute clip ~13x slower on a 16-core/32-thread Ryzen 9 7950X). Queued calls keep heartbeating so they are not killed by the MCP client timeout.
+
+---
+
 ## [0.8.1] - 2026-10-18
 
 ### Fixed
