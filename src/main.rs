@@ -17,7 +17,10 @@ use std::path::PathBuf;
 use crate::screenshot::{
     CaptureScreenshotTool, SampleVideoScenesTool, handle_capture_screenshot, handle_sample_scenes,
 };
-use crate::transcriber::{TranscribeTool, handle_transcribe_media};
+use crate::transcriber::{
+    PROGRESS_HEARTBEAT_INTERVAL, ProgressGuard, ProgressSink, TranscribeTool,
+    handle_transcribe_media,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -56,13 +59,18 @@ impl ServerHandler for AppHandler {
     async fn handle_call_tool_request(
         &self,
         params: CallToolRequestParams,
-        _runtime: std::sync::Arc<dyn McpServer>,
+        runtime: std::sync::Arc<dyn McpServer>,
     ) -> std::result::Result<CallToolResult, CallToolError> {
+        let sink: std::sync::Arc<dyn ProgressSink> = std::sync::Arc::new(runtime);
         if params.name == "transcribe_media" {
-            handle_transcribe_media(self.model_path.as_deref(), params).await
+            handle_transcribe_media(self.model_path.as_deref(), params, Some(sink)).await
         } else if params.name == "capture_screenshot" {
+            let token = params.meta.as_ref().and_then(|m| m.progress_token.clone());
+            let _guard = ProgressGuard::start(token, Some(sink), PROGRESS_HEARTBEAT_INTERVAL);
             handle_capture_screenshot(params).await
         } else if params.name == "sample_video_scenes" {
+            let token = params.meta.as_ref().and_then(|m| m.progress_token.clone());
+            let _guard = ProgressGuard::start(token, Some(sink), PROGRESS_HEARTBEAT_INTERVAL);
             handle_sample_scenes(params).await
         } else {
             Err(CallToolError::unknown_tool(params.name))
