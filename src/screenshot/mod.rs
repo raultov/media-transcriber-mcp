@@ -311,7 +311,7 @@ mod tests {
             let result = extract_screenshot(dummy_video.path().to_str().unwrap(), "00:00:01");
             assert!(result.is_ok());
             let image_data = result.unwrap();
-            assert!(image_data.len() > 0);
+            assert!(!image_data.is_empty());
         }
     }
 
@@ -323,22 +323,41 @@ mod tests {
 
     #[test]
     fn test_sample_scenes_valid_video() {
+        // Scene detection needs an actual cut: ffmpeg exits non-zero when no
+        // frame passes `gt(scene,0.4)`, so a single continuous test pattern
+        // would make the extraction fail rather than return zero scenes.
         let dummy_video = tempfile::Builder::new().suffix(".mp4").tempfile().unwrap();
         let status = Command::new("ffmpeg")
             .args([
+                "-y",
+                "-loglevel",
+                "error",
                 "-f",
                 "lavfi",
                 "-i",
-                "testsrc=duration=2:size=128x128:rate=10",
-                "-y",
+                "testsrc=duration=1:size=128x128:rate=10",
+                "-f",
+                "lavfi",
+                "-i",
+                "smptebars=duration=1:size=128x128:rate=10",
+                "-filter_complex",
+                "[0:v][1:v]concat=n=2:v=1",
                 dummy_video.path().to_str().unwrap(),
             ])
             .output()
             .expect("Failed to start ffmpeg for test setup");
 
-        if status.status.success() {
-            let result = sample_scenes(dummy_video.path().to_str().unwrap(), 2);
-            assert!(result.is_ok());
-        }
+        assert!(
+            status.status.success(),
+            "fixture generation failed: {}",
+            String::from_utf8_lossy(&status.stderr)
+        );
+
+        let result = sample_scenes(dummy_video.path().to_str().unwrap(), 2);
+        assert!(result.is_ok());
+        assert!(
+            !result.unwrap().is_empty(),
+            "the hard cut between the two patterns must yield at least one scene"
+        );
     }
 }
