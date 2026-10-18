@@ -1,32 +1,10 @@
 # Media Transcriber MCP
 
-[![Version](https://img.shields.io/badge/version-0.7.4-blue.svg)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](Cargo.toml)
 
 An MCP (Model Context Protocol) server that brings video parsing, transcription, and understanding to your AI assistant.
 
-> ✨ **New in v0.7.4**: Added **TikTok Support**! All three tools now accept TikTok URLs (including `vm.tiktok.com` short links). The server auto-detects the source from the URL, or you can pass `source: "tiktok"` explicitly. Use `browser_cookies` if your region blocks the video.
->
-> ✨ **New in v0.7.3**: Added **Instagram Support** and **Browser Cookies**! All three tools now accept Instagram URLs. You can now pass `browser_cookies: "chrome"` (or firefox, safari, edge) to authenticate with sites like Instagram or access private videos.
->
-> ✨ **New in v0.7.2**: Added **Twitter/X Support**! All three tools (`transcribe_media`, `capture_screenshot`, `sample_video_scenes`) now accept Twitter and X URLs. The server auto-detects the source from the URL, or you can pass `source: "twitter"` explicitly.
->
-> ✨ **New in v0.7.1**: Added **Reddit Support**! All three tools (`transcribe_media`, `capture_screenshot`, `sample_video_scenes`) now accept Reddit video URLs. The server auto-detects the source from the URL, or you can pass `source: "reddit"` explicitly.
->
-> ✨ **New in v0.7.0**: Added **Vimeo Support**! All three tools (`transcribe_media`, `capture_screenshot`, `sample_video_scenes`) now accept Vimeo URLs. The server auto-detects the source from the URL, or you can pass `source: "vimeo"` explicitly.
->
-> ✨ **New in v0.6.0**: Added **Streaming / Chunked Processing**! The `transcribe_media` tool now accepts `start_timestamp` and `duration_secs` parameters so the LLM can process long media files in manageable windows, preventing context window overflow.
->
-> ✨ **New in v0.5.0**: Added **Native Translation & Subtitling**! You can now ask the LLM to translate media directly to English using Whisper's native engine, or request clean plain-text output instead of SRT.
->
-> ✨ **New in v0.4.2**: Added **YouTube Subtitle Optimization**! For YouTube videos, the server now attempts to download official/auto-generated subtitles (SRT) first for near-instant results, falling back to Whisper only if necessary.
->
-> ✨ **New in v0.4.1**: Added **Multimodal Visual Sampling**! Use the `sample_video_scenes` tool to automatically extract keyframes based on scene changes and send them to the LLM for a complete visual summary.
->
-> ✨ **New in v0.4.0**: Added **Speaker Diarization**! The LLM now receives transcriptions segmented by speaker turns to provide better conversational context.
->
-> ✨ **New in v0.3.1**: Replaces local-only limitation. Now supports downloading directly from **YouTube** by passing either a URL or a search query! (Requires `yt-dlp`).
->
-> ✨ **New in v0.2.0**: Added the ability to take screenshots from videos at specific timestamps!
+See [CHANGELOG.md](CHANGELOG.md) for the release notes of every version.
 
 ## Features
 
@@ -40,7 +18,9 @@ An MCP (Model Context Protocol) server that brings video parsing, transcription,
 - **Multimodal Visual Sampling**: Automatically extracts multiple key frames based on scene changes and sends them to the LLM to provide a complete visual summary of the video.
 - **Screenshot Capture**: Takes screenshots from videos at specific timestamps to provide visual context to the LLM.
 - **Speaker Diarization**: Detects speaker turns and formats transcriptions with speaker tags for clear conversational context.
-- **Auto-Model Download**: Automatically downloads the necessary Whisper, fallback models don't require manual setup.
+- **Accurate Transcription**: Beam-search decoding, Silero VAD (skips silence, reduces hallucinations) and a `large-v3-turbo` default model that holds up on accents, jargon and technical talks.
+- **Vocabulary Hints**: `initial_prompt` injects domain terms so Whisper transcribes `WebMCP` or `knot.kz` instead of a similarly-sounding word.
+- **Auto-Model Download**: Automatically downloads the required Whisper and VAD models; no manual setup.
 - **Universal Media Support:** Automatically handles video (mp4, mkv, avi, etc.) and audio (mp3, ogg, wav, flac, etc.) using `ffmpeg`.
 - **Zero Configuration:** The server boots instantly without any mandatory environment variables or flags.
 - **Persistent Caching:** Models are stored in `~/.cache/media-transcriber-mcp/` to avoid redownloading across sessions.
@@ -49,25 +29,133 @@ An MCP (Model Context Protocol) server that brings video parsing, transcription,
 ## Requirements
 
 - **FFmpeg:** Must be installed on your system and available in your `PATH`.
+- **curl:** Used to download models on first use (also required by `yt-dlp` workflows).
 - **Rust (optional):** If you are compiling from source.
+- **Disk space:** ~550 MB the first time, for the default model plus the VAD model.
 
 ## 🚀 Quick Start
 
-The easiest way to install and run the MCP Server natively is via Rust's Cargo or by downloading the pre-compiled binaries.
+Every method installs the **same pre-compiled binaries** published on each [GitHub Release](https://github.com/raultov/media-transcriber-mcp/releases); a Rust toolchain is only needed for the Cargo and source routes. The npm package is a small wrapper whose `postinstall` fetches the pre-compiled binary for your platform from GitHub Releases: no compiling, no Rust toolchain.
 
-### 1. Installation
+> ⚠️ **Always use the scoped npm name `@raultov/media-transcriber-mcp`.** The unscoped `media-transcriber-mcp` on npm is not this project; scoped names cannot be squatted by a third party.
 
-**Option A: Pre-compiled Binaries (Recommended)**
-Go to the [Releases](https://github.com/raultov/media-transcriber-mcp/releases) page and download the native executable for your platform (macOS, Windows, Linux). We provide `.msi` installers for Windows and shell scripts for UNIX systems.
+Prefer zero effort? The one-prompt route below lets your AI agent do all of it. Otherwise, methods are grouped by platform and ordered by popularity.
 
-**Option B: Install via Cargo**
+### 🤖 One-Prompt Install (any platform)
+
+Paste this prompt into any AI coding agent's chat (Claude Code, opencode, Cursor, Codex CLI, Copilot, ...) and let it install the server and register it with every MCP-capable client it detects on your machine:
+
+```
+Install and set up the media-transcriber-mcp MCP server on this machine.
+
+1. Install the server binary with the first method that works on this OS:
+   - Homebrew available (macOS/Linux): brew install raultov/tap/media-transcriber-mcp
+   - Node.js >= 14 available (any OS): npm install -g @raultov/media-transcriber-mcp
+   - macOS/Linux fallback: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/raultov/media-transcriber-mcp/releases/latest/download/media-transcriber-mcp-installer.sh | sh
+   - Windows fallback: powershell -ExecutionPolicy Bypass -c "irm https://github.com/raultov/media-transcriber-mcp/releases/latest/download/media-transcriber-mcp-installer.ps1 | iex"
+   Verify with: media-transcriber-mcp --version (add the install dir to PATH if it is not found).
+
+2. Register the MCP server with every AI client you detect on this machine:
+   - Claude Code: claude mcp add --scope user media-transcriber-mcp media-transcriber-mcp
+   - opencode: merge into ~/.config/opencode/opencode.json —
+     "mcp": { "media-transcriber-mcp": { "type": "local", "command": ["media-transcriber-mcp"] } }
+   - Codex CLI: append to ~/.codex/config.toml —
+     [mcp_servers.media-transcriber-mcp]
+     command = "media-transcriber-mcp"
+   - Any other MCP-capable client (Cursor, Windsurf, VS Code, ...): add it with its own MCP settings, command "media-transcriber-mcp" with no arguments.
+
+3. Report what you installed and which clients you configured, and remind me to restart each client so the MCP server loads. The server downloads a ~550 MB Whisper model on first transcription.
+```
+
+### macOS
+
+**1. Homebrew**, the natural option on macOS:
+
+```bash
+brew install raultov/tap/media-transcriber-mcp
+```
+
+The formula fetches the pre-compiled binary (Apple Silicon and Intel) from GitHub Releases, and `brew upgrade` keeps you current.
+
+**2. npm / npx**, the MCP-client convention (requires Node.js >= 14):
+
+```bash
+npm install -g @raultov/media-transcriber-mcp   # installs the `media-transcriber-mcp` command
+npx -y @raultov/media-transcriber-mcp           # ...or just run it once, nothing to install
+```
+
+**3. Shell installer**, a one-liner that installs to `~/.cargo/bin`:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/raultov/media-transcriber-mcp/releases/latest/download/media-transcriber-mcp-installer.sh | sh
+```
+
+**4. Cargo**, if you already have Rust:
+
 ```bash
 cargo install --git https://github.com/raultov/media-transcriber-mcp
 ```
 
-**Option C: Install via Shell Script (Unix)**
+**5. Manual download**: the `aarch64-apple-darwin` or `x86_64-apple-darwin` `.tar.xz` archive from the [Releases](https://github.com/raultov/media-transcriber-mcp/releases) page.
+
+### Linux
+
+**1. npm / npx** (requires Node.js >= 14):
+
+```bash
+npm install -g @raultov/media-transcriber-mcp
+npx -y @raultov/media-transcriber-mcp
+```
+
+**2. Shell installer**, a one-liner that installs to `~/.cargo/bin`:
+
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/raultov/media-transcriber-mcp/releases/latest/download/media-transcriber-mcp-installer.sh | sh
+```
+
+The Linux binaries require glibc >= 2.35 (Ubuntu 22.04+, Debian 12+, Fedora 36+).
+
+**3. Homebrew (Linuxbrew)**, if you already use [Homebrew on Linux](https://docs.brew.sh/Homebrew-on-Linux):
+
+```bash
+brew install raultov/tap/media-transcriber-mcp
+```
+
+**4. Cargo**, if you already have Rust:
+
+```bash
+cargo install --git https://github.com/raultov/media-transcriber-mcp
+```
+
+**5. Manual download**: the `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu` `.tar.xz` archive from the [Releases](https://github.com/raultov/media-transcriber-mcp/releases) page.
+
+### Windows
+
+**1. PowerShell installer**, a one-liner:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/raultov/media-transcriber-mcp/releases/latest/download/media-transcriber-mcp-installer.ps1 | iex"
+```
+
+**2. npm / npx** (requires Node.js >= 14):
+
+```powershell
+npm install -g @raultov/media-transcriber-mcp
+```
+
+**3. Cargo**, if you already have Rust:
+
+```powershell
+cargo install --git https://github.com/raultov/media-transcriber-mcp
+```
+
+**4. Manual download**: the `x86_64-pc-windows-msvc` `.zip` archive from the [Releases](https://github.com/raultov/media-transcriber-mcp/releases) page.
+
+### From source
+
+```bash
+git clone https://github.com/raultov/media-transcriber-mcp && cd media-transcriber-mcp
+make install   # release build copied to ~/.cargo/bin (or cargo install --path . --locked)
 ```
 
 ### 2. Configure your MCP Client
@@ -117,6 +205,10 @@ Transcribes a local audio or video file to text. Supports native translation, mu
   - `browser_cookies` (string, optional): Extract cookies from a browser for authentication (e.g., `"chrome"`, `"firefox"`, `"safari"`, `"edge"`). **Required for Instagram**, may be needed for TikTok.
   - `start_timestamp` (string, optional): Chunking — start offset for partial transcription (e.g. `"00:20:00"` or `"1200"`). Omit to start from the beginning.
   - `duration_secs` (integer, optional): Chunking — how many seconds to transcribe from `start_timestamp`. Omit to transcribe to the end. For very long files (>20 min), use this together with `start_timestamp` to iterate in windows and avoid context window overflow.
+  - `language` (string, optional): Spoken language ISO code (e.g. `"es"`, `"en"`). **Strongly recommended when known.** Defaults to `"auto"`, which re-detects the language on every call from the first seconds of audio and can get it wrong on silence or music.
+  - `initial_prompt` (string, optional): Vocabulary hint — jargon, acronyms and proper nouns expected in the audio (e.g. `"WebMCP, knot.kz, chrome-debug, OpenCode"`). Whisper cannot guess terms it has never seen in context, so this is what makes technical talks come out readable.
+  - `model` (string, optional): `"large-v3-turbo-q5_0"` (default), `"medium"`, `"small"` or `"base"`. See [Models](#models). Ignored when the server was started with `WHISPER_MODEL_PATH`.
+  - `vad` (boolean, optional): Run Voice Activity Detection to skip silence/music and reduce hallucinated sentences. Defaults to `true`.
 
 ### `capture_screenshot`
 Captures a screenshot from a video file at a specific timestamp, returning it as a Base64-encoded image.
@@ -134,15 +226,59 @@ Automatically extracts key frames from a video based on scene changes and return
   - `source` (string, optional): Source hint — `"youtube"`, `"vimeo"`, `"reddit"`, `"twitter"`, `"instagram"`, or `"tiktok"`. Auto-detected from the URL when omitted.
   - `browser_cookies` (string, optional): Extract cookies from a browser for authentication (e.g., `"chrome"`, `"firefox"`). Required for Instagram, may be needed for TikTok.
 
+## Models
+
+The model is downloaded on first use and cached in `~/.cache/media-transcriber-mcp/`.
+
+| `model` | File | Size | Accuracy | Speed (CPU) |
+|---|---|---|---|---|
+| `large-v3-turbo-q5_0` *(default)* | `ggml-large-v3-turbo-q5_0.bin` | ~547 MB | Best | Slowest |
+| `medium` | `ggml-medium.bin` | ~1462 MB | High | Very slow |
+| `small` | `ggml-small.bin` | ~466 MB | Medium | Fast |
+| `base` | `ggml-base.bin` | ~142 MB | Low | Fastest |
+
+The default is `large-v3-turbo-q5_0` because the small models replace words they cannot resolve with similarly-sounding nonsense, which is far worse than being slow. Use `base` only for quick drafts of clear, simple audio.
+
+A custom GGML model can be supplied with `WHISPER_MODEL_PATH` (or `--model-path`), which takes precedence over the `model` argument.
+
+**Threading.** The decoder uses half the logical CPU count, capped at 16. Whisper is memory-bandwidth bound and SMT siblings make it *slower*: measured on a 16-core/32-thread Ryzen 9 7950X, 16 threads took 104 s for a 5-minute clip while 32 threads took 768–1397 s.
+
+## Tips for accurate transcription
+
+1. **Set `language`** whenever you know it. Auto-detection re-runs on every call and wastes accuracy on silence, music or non-speech intros.
+2. **Pass `initial_prompt` with the domain vocabulary.** A technical talk with an empty prompt loses most proper nouns. Example for a talk about web agents:
+   ```json
+   { "initial_prompt": "WebMCP, MCP, knot.kz, chrome-debug, OpenCode, Claude Code, HTML, CSS, JavaScript, TypeScript, Angular, LLM, tools" }
+   ```
+3. **Leave `vad` on** unless the audio is very noisy. It removes silence and music before decoding, which is where most hallucinated sentences come from.
+4. **Chunking does not save time.** It only bounds output size, because Whisper is linear in duration either way. If you chunk, overlap the windows by ~5 s and drop the duplicated sentences, otherwise words at the boundaries are lost.
+
 ## Testing
 
-To run the unit tests for the project, use the standard Cargo test command:
+This project uses the same quality gates as the rest of the author's Rust repositories. Run all of them with:
 
 ```bash
-cargo test
+make check
 ```
 
-This will execute the tests for audio conversion, model discovery, and other core components.
+which runs `cargo fmt -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-features`, `cargo doc`, `cargo dupes check` (duplication must stay at **0%**; see `dupes.toml`), `cargo publish --dry-run` and a version-sync check between `Cargo.toml` and `package.json`. Individually:
+
+```bash
+make fmt            # auto-format
+make clippy         # lints
+make test           # all test targets
+make doc            # public documentation
+make dupes          # duplication gate
+make publish-check  # the crate must package cleanly
+make version-check  # package.json and Cargo.toml versions match
+make check-all      # make check + the E2E suite
+```
+
+Clippy thresholds live in `clippy.toml` and the lint levels in `Cargo.toml`'s `[lints]` section. Findings must be fixed by refactoring — never silenced with `#[allow]`.
+
+## Releasing
+
+Tagging `vX.Y.Z` runs the release workflow: it verifies the tag against `Cargo.toml`/`package.json` and the `CHANGELOG.md` section (`preflight`), runs `make check` (`gates`), then builds the archives and the shell / PowerShell / npm / Homebrew installers for macOS, Linux and Windows, and publishes `@raultov/media-transcriber-mcp` to npm and `media-transcriber-mcp.rb` to `raultov/homebrew-tap`. The workflow needs the `NPM_TOKEN` and `HOMEBREW_TAP_TOKEN` repository secrets. See `AGENTS.md` for the maintainer checklist.
 
 ## Roadmap / TODOs
 
