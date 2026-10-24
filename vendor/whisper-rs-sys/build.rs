@@ -101,20 +101,24 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed=wrapper.h");
+    // Patched: this copy carries local changes to whisper.cpp, so the C/C++
+    // build must rerun when they change (upstream only watches wrapper.h).
+    println!("cargo:rerun-if-changed=whisper.cpp");
 
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let whisper_root = out.join("whisper.cpp");
 
-    if !whisper_root.exists() {
-        std::fs::create_dir_all(&whisper_root).unwrap();
-        fs_extra::dir::copy("./whisper.cpp", &out, &Default::default()).unwrap_or_else(|e| {
-            panic!(
-                "Failed to copy whisper sources into {}: {}",
-                whisper_root.display(),
-                e
-            )
-        });
-    }
+    // Patched: refresh the copy on every run so changes to whisper.cpp reach
+    // CMake (upstream copies it only once per OUT_DIR and never again).
+    std::fs::create_dir_all(&whisper_root).unwrap();
+    let copy_options = fs_extra::dir::CopyOptions::new().overwrite(true);
+    fs_extra::dir::copy("./whisper.cpp", &out, &copy_options).unwrap_or_else(|e| {
+        panic!(
+            "Failed to copy whisper sources into {}: {}",
+            whisper_root.display(),
+            e
+        )
+    });
 
     if env::var("WHISPER_DONT_GENERATE_BINDINGS").is_ok() {
         let _: u64 = std::fs::copy("src/bindings.rs", out.join("bindings.rs"))
@@ -218,31 +222,11 @@ fn main() {
 
     if cfg!(feature = "vulkan") {
         config.define("GGML_VULKAN", "ON");
-        if cfg!(windows) {
-            println!("cargo:rerun-if-env-changed=VULKAN_SDK");
-            println!("cargo:rustc-link-lib=vulkan-1");
-            let vulkan_path = match env::var("VULKAN_SDK") {
-                Ok(path) => PathBuf::from(path),
-                Err(_) => panic!(
-                    "Please install Vulkan SDK and ensure that VULKAN_SDK env variable is set"
-                ),
-            };
-            let vulkan_lib_path = vulkan_path.join("Lib");
-            println!("cargo:rustc-link-search={}", vulkan_lib_path.display());
-        } else if cfg!(target_os = "macos") {
-            println!("cargo:rerun-if-env-changed=VULKAN_SDK");
-            println!("cargo:rustc-link-lib=vulkan");
-            let vulkan_path = match env::var("VULKAN_SDK") {
-                Ok(path) => PathBuf::from(path),
-                Err(_) => panic!(
-                    "Please install Vulkan SDK and ensure that VULKAN_SDK env variable is set"
-                ),
-            };
-            let vulkan_lib_path = vulkan_path.join("lib");
-            println!("cargo:rustc-link-search={}", vulkan_lib_path.display());
-        } else {
-            println!("cargo:rustc-link-lib=vulkan");
-        }
+        // Patched: ggml-vulkan opens the Vulkan loader at run time (see
+        // vendor/README.md in media-transcriber-mcp), so it is not linked here.
+        // The SDK is still needed at build time for the headers and glslc,
+        // which CMake's FindVulkan locates through VULKAN_SDK.
+        println!("cargo:rerun-if-env-changed=VULKAN_SDK");
     }
 
     if cfg!(feature = "openblas") {

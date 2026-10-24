@@ -1,4 +1,6 @@
 /target
+# Build caches that editors create inside vendored crates
+vendor/*/target/
 out.json
 out.err
 logs/
