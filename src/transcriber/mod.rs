@@ -1,17 +1,20 @@
 use rust_mcp_sdk::{macros, schema::*};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 use crate::audio::TranscribeOptions;
 use crate::audio::backend::GpuSettings;
+use crate::audio::cache::{self, SharedModelCache};
 use crate::audio::utils::{clean_srt, convert_to_wav};
 use crate::audio::whisper::{
     DEFAULT_MODEL, WhisperModel, default_cache_dir, get_or_download_model,
     get_or_download_vad_model,
 };
-use crate::audio::{default_threads, normalize_language, sanitize_prompt, transcribe_audio};
+use crate::audio::{
+    cached_context, default_threads, normalize_language, sanitize_prompt, transcribe_audio,
+};
 use crate::sources::instagram::{
     download_instagram_audio, download_instagram_subtitles, is_instagram_url,
 };
@@ -387,6 +390,7 @@ async fn transcribe_with_whisper(
     let language = req.language.clone();
     let initial_prompt = req.initial_prompt.clone();
     let gpu = engine.gpu;
+    let models = Arc::clone(&engine.models);
     // Not capped on the GPU: it made no measurable difference there, and
     // whisper.cpp may silently decode on the CPU (no device found), where a
     // cap made a 30 s clip ~3x slower.
@@ -404,13 +408,15 @@ async fn transcribe_with_whisper(
             vad_model_path: vad_model.as_deref(),
             start_offset_secs,
             progress_sender,
-            gpu,
         };
         let wav_path = wav_file
             .path()
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Temporary WAV path is not valid UTF-8"))?;
-        transcribe_audio(wav_path, &resolved_model, &opts)
+        let ctx = cached_context(&models, &resolved_model, gpu)?;
+        let text = transcribe_audio(wav_path, &ctx, &opts);
+        cache::lock(&models).release(ctx, Instant::now());
+        text
     });
 
     match handle.await {
@@ -448,6 +454,8 @@ pub struct WhisperEngine {
     pub model_path: Option<PathBuf>,
     /// Compute backend for decoding.
     pub gpu: GpuSettings,
+    /// Loaded model, reused across calls (see [`crate::audio::cache`]).
+    pub models: SharedModelCache<whisper_rs::WhisperContext>,
 }
 
 pub async fn handle_transcribe_media(
