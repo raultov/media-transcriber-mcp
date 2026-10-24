@@ -10,7 +10,7 @@ Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 ## [0.10.0] - 2026-10-24
 
 ### Added
-- **The loaded Whisper model is kept in memory between calls** ([#3](https://github.com/raultov/media-transcriber-mcp/issues/3)) instead of being loaded again for every transcription. Only one model is kept: a different `model` (or GPU setting) frees the previous one before loading the new one, so two models never share RAM or VRAM. The server logs `Whisper model: loaded ... in N s` or `reusing ... (already loaded)` on every call.
+- **The loaded Whisper model is kept in memory between calls** ([#3](https://github.com/raultov/media-transcriber-mcp/issues/3)) instead of being loaded again for every transcription. Only one model is kept: a different `model` (or GPU setting) frees the previous one before loading the new one, so two models do not share RAM or VRAM (transcriptions are serialised; if the previous model were ever still in use, the server logs a warning instead of claiming it was freed). The server logs `Whisper model: loaded ... in N s` or `reusing ... (already loaded)` on every call.
 - `--model-idle-timeout <SECS>` / `WHISPER_MODEL_IDLE_TIMEOUT` (default `600`, `0` = never) frees the model after that long without calls, counted from the end of the last transcription; a model in use is never freed.
 
 ### Notes

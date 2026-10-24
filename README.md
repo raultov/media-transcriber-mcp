@@ -242,7 +242,7 @@ The default is `large-v3-turbo-q5_0` because the small models replace words they
 
 A custom GGML model can be supplied with `WHISPER_MODEL_PATH` (or `--model-path`), which takes precedence over the `model` argument.
 
-**The loaded model stays in memory between calls.** The first transcription loads it (the server logs `Whisper model: loaded ggml-large-v3-turbo-q5_0.bin in 0.2 s`) and later calls reuse it (`Whisper model: reusing ...`). Only one model is kept: asking for a different `model` frees the previous one before loading the new one, so two models never share RAM or VRAM. After 10 minutes without calls the model is freed and the next call loads it again.
+**The loaded model stays in memory between calls.** The first transcription loads it (the server logs `Whisper model: loaded ggml-large-v3-turbo-q5_0.bin in 0.2 s`) and later calls reuse it (`Whisper model: reusing ...`). Only one model is kept: asking for a different `model` frees the previous one before loading the new one, so two models do not share RAM or VRAM (transcriptions run one at a time). After 10 minutes without calls the model is freed and the next call loads it again.
 
 | Flag | Env var | Effect |
 |---|---|---|
