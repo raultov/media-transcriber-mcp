@@ -15,6 +15,9 @@ use rust_mcp_sdk::{
 use std::path::PathBuf;
 
 use crate::audio::backend::GpuSettings;
+use crate::audio::cache::{
+    DEFAULT_IDLE_TIMEOUT, ModelCache, idle_timeout_from_secs, spawn_idle_evictor,
+};
 use crate::screenshot::{
     CaptureScreenshotTool, SampleVideoScenesTool, handle_capture_screenshot, handle_sample_scenes,
 };
@@ -41,13 +44,20 @@ struct Args {
     /// GPU device index, for machines with more than one GPU.
     #[arg(long, env = "WHISPER_GPU_DEVICE", default_value_t = 0)]
     gpu_device: i32,
+
+    /// Seconds without calls after which the loaded model is freed from
+    /// memory (RAM or VRAM). The next call loads it again. 0 keeps it loaded.
+    #[arg(long, env = "WHISPER_MODEL_IDLE_TIMEOUT", default_value_t = DEFAULT_IDLE_TIMEOUT.as_secs())]
+    model_idle_timeout: u64,
 }
 
 impl Args {
     fn engine(&self) -> WhisperEngine {
+        let idle_timeout = idle_timeout_from_secs(self.model_idle_timeout);
         WhisperEngine {
             model_path: self.model_path.clone(),
             gpu: GpuSettings::from_flags(self.no_gpu, self.gpu_device),
+            models: std::sync::Arc::new(std::sync::Mutex::new(ModelCache::new(idle_timeout))),
         }
     }
 }
@@ -133,6 +143,8 @@ async fn main() -> SdkResult<()> {
     let args = Args::parse();
     let engine = args.engine();
     eprintln!("Whisper backend: {}", engine.gpu.describe());
+    // Runs for the life of the server; dropping the handle detaches it.
+    let _idle_evictor = spawn_idle_evictor(std::sync::Arc::clone(&engine.models));
 
     let server_details = InitializeResult {
         server_info: Implementation {
@@ -195,6 +207,22 @@ mod tests {
             Reason::CpuBuild
         };
         assert_eq!(gpu.reason, expected);
+    }
+
+    #[test]
+    fn test_args_model_idle_timeout() {
+        let default = Args::try_parse_from(["media-transcriber-mcp"]).unwrap();
+        assert_eq!(default.model_idle_timeout, DEFAULT_IDLE_TIMEOUT.as_secs());
+        let models = default.engine().models;
+        assert_eq!(
+            audio::cache::lock(&models).idle_timeout(),
+            Some(DEFAULT_IDLE_TIMEOUT)
+        );
+
+        let never =
+            Args::try_parse_from(["media-transcriber-mcp", "--model-idle-timeout", "0"]).unwrap();
+        let models = never.engine().models;
+        assert_eq!(audio::cache::lock(&models).idle_timeout(), None);
     }
 
     #[test]

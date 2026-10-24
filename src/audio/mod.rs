@@ -1,12 +1,16 @@
 pub mod backend;
+pub mod cache;
 pub mod utils;
 pub mod whisper;
 
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperVadParams};
 
 use backend::GpuSettings;
+use cache::{Lookup, ModelCache, ModelKey, Replaced};
 
 /// Upper bound on decoder threads.
 ///
@@ -39,8 +43,6 @@ pub struct TranscribeOptions<'a> {
     pub start_offset_secs: u64,
     /// Optional channel receiving decoding progress in percent (`0..=100`).
     pub progress_sender: Option<tokio::sync::watch::Sender<i32>>,
-    /// Compute backend; falls back to the CPU if the GPU cannot be used.
-    pub gpu: GpuSettings,
 }
 
 /// Shifts a Whisper timestamp (in 10 ms ticks) by `start_offset_secs`.
@@ -143,15 +145,17 @@ fn sampling_strategy(beam_size: i32) -> SamplingStrategy {
     }
 }
 
-/// Transcribes 16 kHz mono PCM `wav_path` with `model_path`.
+/// Transcribes 16 kHz mono PCM `wav_path` with an already loaded model.
+///
+/// Every call gets its own [`whisper_rs::WhisperState`], so calls that share
+/// a cached context stay independent.
 pub fn transcribe_audio(
     wav_path: &str,
-    model_path: &Path,
+    ctx: &WhisperContext,
     opts: &TranscribeOptions<'_>,
 ) -> Result<String> {
     let audio_data = read_wav_samples(wav_path)?;
 
-    let ctx = load_context(model_path, opts.gpu)?;
     let mut state = ctx
         .create_state()
         .map_err(|e| anyhow::anyhow!("Failed to create state: {e}"))?;
@@ -164,6 +168,53 @@ pub fn transcribe_audio(
         .map_err(|e| anyhow::anyhow!("Failed to run model: {e}"))?;
 
     collect_segments(&state, opts.output_format, opts.start_offset_secs)
+}
+
+/// Returns the model at `model_path` from `cache`, loading it on a miss.
+///
+/// Logs whether the model was reused or loaded, and how long the load took,
+/// so users can tell why the first call is slower than the next ones.
+pub fn cached_context(
+    cache: &Mutex<ModelCache<WhisperContext>>,
+    model_path: &Path,
+    gpu: GpuSettings,
+) -> Result<Arc<WhisperContext>> {
+    let key = ModelKey {
+        path: model_path.to_path_buf(),
+        gpu,
+    };
+    let mut guard = cache::lock(cache);
+    // Taken after the lock so a queued call does not count its wait as load
+    // time, nor start the model's idle clock early.
+    let started = Instant::now();
+    let (ctx, lookup) = guard.get_or_load(&key, started, || load_context(model_path, gpu))?;
+    drop(guard);
+    match lookup {
+        Lookup::Hit => eprintln!(
+            "Whisper model: reusing {} (already loaded)",
+            key.file_name()
+        ),
+        Lookup::Miss { replaced } => {
+            log_replaced(replaced);
+            eprintln!(
+                "Whisper model: loaded {} in {:.1} s",
+                key.file_name(),
+                started.elapsed().as_secs_f64()
+            );
+        }
+    }
+    Ok(ctx)
+}
+
+fn log_replaced(replaced: Option<Replaced>) {
+    match replaced {
+        Some(old) if old.still_in_use => eprintln!(
+            "WARNING: Whisper model {} is still in use; it is freed when that transcription ends",
+            old.key.file_name()
+        ),
+        Some(old) => eprintln!("Whisper model: unloaded {}", old.key.file_name()),
+        None => {}
+    }
 }
 
 /// Loads the model on the requested backend, retrying on the CPU on failure.
@@ -303,25 +354,21 @@ mod tests {
     }
 
     #[test]
-    fn test_transcribe_audio_invalid_file() {
-        let opts = TranscribeOptions {
-            task: "transcribe",
-            output_format: "srt",
-            language: "auto",
-            initial_prompt: None,
-            beam_size: 1,
-            threads: 2,
-            vad_model_path: None,
-            start_offset_secs: 0,
-            progress_sender: None,
-            gpu: GpuSettings::cpu(),
-        };
-        let result = transcribe_audio(
-            "non_existent_file.wav",
+    fn test_cached_context_missing_model_fails_and_caches_nothing() {
+        let cache = Mutex::new(ModelCache::new(None));
+        let result = cached_context(
+            &cache,
             &PathBuf::from("non_existent_model.bin"),
-            &opts,
+            GpuSettings::cpu(),
         );
         assert!(result.is_err());
+        assert!(cache::lock(&cache).loaded().is_none());
+    }
+
+    #[test]
+    fn test_read_wav_samples_missing_file() {
+        let err = read_wav_samples("non_existent_file.wav").unwrap_err();
+        assert!(err.to_string().contains("non_existent_file.wav"));
     }
 
     #[test]
