@@ -8,6 +8,9 @@ license = "MIT"
 homepage = "https://github.com/raultov/media-transcriber-mcp"
 repository = "https://github.com/raultov/media-transcriber-mcp"
 readme = "README.md"
+# The patched whisper-rs-sys (see [patch.crates-io]) is ~14 MB of C/C++ and
+# only applies to builds from this repository, so it is not packaged.
+exclude = ["vendor/"]
 keywords = ["mcp", "whisper", "transcription", "audio", "video"]
 categories = ["multimedia::audio", "multimedia::video"]
 
@@ -55,3 +58,11 @@ base64 = "0.22.1"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# whisper-rs-sys with the Vulkan loader opened at run time instead of linked,
+# so a `vulkan` build also starts on machines without libvulkan and decodes on
+# the CPU there. See vendor/README.md. `[patch]` only applies to builds from
+# this repository (release binaries); `cargo install` from crates.io uses the
+# upstream crate.
+[patch.crates-io]
+whisper-rs-sys = { path = "vendor/whisper-rs-sys" }
