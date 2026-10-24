@@ -79,14 +79,16 @@ jobs:
         run: ffmpeg -version | head -1
       - name: make check
         run: make check
-      # Hand-added: the GPU features are not in the release binaries, so they
-      # are compile-checked here to keep them from bit-rotting. Vulkan is the
-      # only backend whose SDK is a plain apt install on the runner (no GPU is
-      # needed to build it).
+      # Hand-added: the Linux and Windows release binaries are built with the
+      # vulkan feature, so it gets the same lint and test gates. The runner has
+      # no GPU, which exercises the CPU fallback. Its SDK is a plain apt
+      # install here (no GPU is needed to build it).
       - name: Install Vulkan headers and shader compiler
         run: sudo apt-get install -y --no-install-recommends libvulkan-dev glslc
       - name: Clippy with the vulkan feature
         run: make clippy FEATURES=vulkan
+      - name: Tests with the vulkan feature
+        run: make test FEATURES=vulkan
 
   # Run 'dist plan' (or host) to determine what tasks we need to do
   plan:
@@ -188,6 +190,12 @@ jobs:
       - name: Install dependencies
         run: |
           ${{ matrix.packages_install }}
+      # Hand-added (kept by allow-dirty = ["ci"]): picks this target's GPU
+      # backend (Vulkan on Linux/Windows, Metal on Apple Silicon, none on Intel
+      # Macs) and installs the Vulkan build toolchain. See the script header.
+      - name: Select GPU backend
+        shell: bash
+        run: .github/scripts/release-gpu-backend.sh "${{ join(matrix.targets, ' ') }}"
       - name: Build artifacts
         run: |
           # Actually do builds and make zips and whatnot
