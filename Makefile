@@ -3,6 +3,12 @@
 # Single-crate repository: the quality gates operate on the repository root.
 MANIFEST  := --manifest-path Cargo.toml
 
+# Cargo features for every gate. Empty = the default CPU-only build. Not
+# `--all-features`: the GPU backends (cuda, vulkan, metal) each need their own
+# SDK, and metal only builds on macOS. Example: `make check FEATURES=vulkan`.
+FEATURES  ?=
+FEAT      := $(if $(FEATURES),--features $(FEATURES),)
+
 # cargo-dupes reads dupes.toml ONLY from the analysed path (no parent lookup)
 # and silently passes when it finds none, so the gate refuses to run without it.
 DUPES_CFG := dupes.toml
@@ -20,22 +26,22 @@ fmt-check:
 
 # Run linter checks
 clippy:
-	cargo clippy $(MANIFEST) --all-targets --all-features -- -D warnings
+	cargo clippy $(MANIFEST) --all-targets $(FEAT) -- -D warnings
 
 # Run every test target `cargo test` runs: unit tests in the library and the
 # binary, integration tests under tests/ and doctests. The gate must cover
 # exactly what `cargo test` covers, so nothing passes locally that the
 # validator would fail.
 test:
-	cargo test $(MANIFEST) --all-features
+	cargo test $(MANIFEST) $(FEAT)
 
 # Run the unit tests only (fast inner loop, not a gate)
 test-lib:
-	cargo test $(MANIFEST) --lib --all-features
+	cargo test $(MANIFEST) --lib $(FEAT)
 
 # The public docs must build
 doc:
-	cargo doc $(MANIFEST) --no-deps --all-features
+	cargo doc $(MANIFEST) --no-deps $(FEAT)
 
 # The crate must package cleanly (no path dependencies, nothing missing).
 # --allow-dirty: the gate runs before the commit it guards.
@@ -70,7 +76,7 @@ check: fmt-check clippy test doc dupes publish-check version-check
 
 # Build release binaries
 build:
-	cargo build $(MANIFEST) --release --all-features
+	cargo build $(MANIFEST) --release $(FEAT)
 
 # Detect OS binary extension
 ifeq ($(OS),Windows_NT)
