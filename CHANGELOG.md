@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 
+## [0.10.1] - 2026-10-24
+
+### Fixed
+- **`vad` had no effect since it was added in 0.8.0.** whisper.cpp only applies VAD in `whisper_full`, and the server decodes through `whisper_full_with_state`, which ignores the setting, so every transcription decoded the whole audio. The server now runs Silero VAD itself, decodes only the speech and maps the timestamps back to the original media. On silence, a typical Whisper hallucination ("Thank you.", "gracias por ver el video") is no longer produced.
+- SRT segments no longer start in the silence before a sentence: when a segment starts in the last 0.5 s of speech before a pause and its words come after it, its start moves to after the pause.
+
+### Notes
+- Measured on a 42-minute Spanish talk (`large-v3-turbo-q5_0`, RTX 4060 Ti with Vulkan): 53 s per call without VAD, 39–46 s with it (VAD drops ~28 % of the audio as silence and itself takes ~5 s on one CPU thread). SRT segments starting inside a silence of 1 s or more: 50 without VAD, 0 with it.
+
+---
+
 ## [0.10.0] - 2026-10-24
 
 ### Added
