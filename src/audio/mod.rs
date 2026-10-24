@@ -10,7 +10,7 @@ use std::time::Instant;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperVadParams};
 
 use backend::GpuSettings;
-use cache::{Lookup, ModelCache, ModelKey};
+use cache::{Lookup, ModelCache, ModelKey, Replaced};
 
 /// Upper bound on decoder threads.
 ///
@@ -183,18 +183,19 @@ pub fn cached_context(
         path: model_path.to_path_buf(),
         gpu,
     };
+    let mut guard = cache::lock(cache);
+    // Taken after the lock so a queued call does not count its wait as load
+    // time, nor start the model's idle clock early.
     let started = Instant::now();
-    let (ctx, lookup) =
-        cache::lock(cache).get_or_load(&key, started, || load_context(model_path, gpu))?;
+    let (ctx, lookup) = guard.get_or_load(&key, started, || load_context(model_path, gpu))?;
+    drop(guard);
     match lookup {
         Lookup::Hit => eprintln!(
             "Whisper model: reusing {} (already loaded)",
             key.file_name()
         ),
         Lookup::Miss { replaced } => {
-            if let Some(old) = replaced {
-                eprintln!("Whisper model: unloaded {}", old.file_name());
-            }
+            log_replaced(replaced);
             eprintln!(
                 "Whisper model: loaded {} in {:.1} s",
                 key.file_name(),
@@ -203,6 +204,17 @@ pub fn cached_context(
         }
     }
     Ok(ctx)
+}
+
+fn log_replaced(replaced: Option<Replaced>) {
+    match replaced {
+        Some(old) if old.still_in_use => eprintln!(
+            "WARNING: Whisper model {} is still in use; it is freed when that transcription ends",
+            old.key.file_name()
+        ),
+        Some(old) => eprintln!("Whisper model: unloaded {}", old.key.file_name()),
+        None => {}
+    }
 }
 
 /// Loads the model on the requested backend, retrying on the CPU on failure.

@@ -10,7 +10,7 @@
 //! without loading a real model.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::time::{Duration, Instant};
 
 use super::backend::GpuSettings;
@@ -50,7 +50,17 @@ pub enum Lookup {
     /// The model was already loaded.
     Hit,
     /// The model was loaded now; `replaced` is the model it evicted, if any.
-    Miss { replaced: Option<ModelKey> },
+    Miss { replaced: Option<Replaced> },
+}
+
+/// A model evicted to make room for another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Replaced {
+    pub key: ModelKey,
+    /// Another holder (a running transcription) still had it, so it stays in
+    /// memory until that holder drops it. Calls are serialised today, so this
+    /// is not expected; it is reported rather than assumed away.
+    pub still_in_use: bool,
 }
 
 #[derive(Debug)]
@@ -91,8 +101,9 @@ impl<T> ModelCache<T> {
     /// Returns the model for `key`, calling `load` only when it is not the
     /// one already loaded.
     ///
-    /// A different model is dropped *before* `load` runs, so two models never
-    /// occupy RAM or VRAM at the same time. If `load` fails the cache is left
+    /// A different model is dropped *before* `load` runs, so it is freed
+    /// before the new one takes RAM or VRAM, unless another holder still has
+    /// it ([`Replaced::still_in_use`]). If `load` fails the cache is left
     /// empty and the error is returned.
     pub fn get_or_load<E>(
         &mut self,
@@ -105,7 +116,10 @@ impl<T> ModelCache<T> {
             return Ok((Arc::clone(&entry.model), Lookup::Hit));
         }
 
-        let replaced = self.entry.take().map(|e| e.key);
+        let replaced = self.entry.take().map(|e| Replaced {
+            still_in_use: Arc::strong_count(&e.model) > 1,
+            key: e.key,
+        });
         let model = Arc::new(load()?);
         self.entry = Some(Entry {
             key: key.clone(),
@@ -172,8 +186,12 @@ where
         let mut ticker = tokio::time::interval(interval);
         loop {
             ticker.tick().await;
-            let Ok(mut guard) = cache.try_lock() else {
-                continue;
+            let mut guard = match cache.try_lock() {
+                Ok(guard) => guard,
+                Err(TryLockError::WouldBlock) => continue,
+                // Same recovery as `lock`: a panic elsewhere must not stop
+                // the model from ever being freed again.
+                Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
             };
             if let Some(key) = guard.evict_idle(Instant::now()) {
                 eprintln!(
@@ -251,7 +269,10 @@ mod tests {
         assert_eq!(
             lookup,
             Lookup::Miss {
-                replaced: Some(key("a"))
+                replaced: Some(Replaced {
+                    key: key("a"),
+                    still_in_use: false
+                })
             }
         );
         assert!(weak.upgrade().is_none(), "the previous model must be freed");
@@ -277,6 +298,29 @@ mod tests {
                 Ok::<_, String>(2)
             })
             .unwrap();
+    }
+
+    #[test]
+    fn test_replacing_a_model_still_in_use_is_reported() {
+        let mut cache = ModelCache::new(None);
+        let t0 = Instant::now();
+        let (held, _) = cache
+            .get_or_load(&key("a"), t0, || Ok::<_, String>(1))
+            .unwrap();
+
+        let (_, lookup) = cache
+            .get_or_load(&key("b"), t0, || Ok::<_, String>(2))
+            .unwrap();
+        assert_eq!(
+            lookup,
+            Lookup::Miss {
+                replaced: Some(Replaced {
+                    key: key("a"),
+                    still_in_use: true
+                })
+            }
+        );
+        assert_eq!(*held, 1, "the holder keeps a usable model");
     }
 
     #[test]
@@ -434,6 +478,31 @@ mod tests {
             .unwrap();
         let task = spawn_idle_evictor(Arc::clone(&cache)).expect("eviction is enabled");
 
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while lock(&cache).loaded().is_some() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        task.abort();
+        assert_eq!(lock(&cache).loaded(), None);
+    }
+
+    #[tokio::test]
+    async fn test_idle_evictor_survives_a_poisoned_lock() {
+        let cache: SharedModelCache<u32> =
+            Arc::new(Mutex::new(ModelCache::new(Some(Duration::from_millis(50)))));
+        lock(&cache)
+            .get_or_load(&key("a"), Instant::now(), || Ok::<_, String>(1))
+            .unwrap();
+        let poisoner = Arc::clone(&cache);
+        let panicked = std::thread::spawn(move || {
+            let _guard = poisoner.lock().unwrap();
+            panic!("poison the cache lock");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert!(cache.is_poisoned());
+
+        let task = spawn_idle_evictor(Arc::clone(&cache)).expect("eviction is enabled");
         let deadline = Instant::now() + Duration::from_secs(5);
         while lock(&cache).loaded().is_some() && Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(20)).await;
