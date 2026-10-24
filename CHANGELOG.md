@@ -19,10 +19,11 @@ Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 - Pull requests now build every target's archives and installers (`pr-run-mode = "upload"`, uploaded as workflow artifacts, nothing is released), so a broken GPU toolchain shows up before a tag is pushed.
 
 ### Fixed
+- The Vulkan build on Windows: ggml-vulkan's `vulkan-shaders-gen` sub-build exceeded the 260-character path limit under Cargo's build directory (`cl.exe` error C1041); it now builds in a short directory.
 - A C++ exception from ggml-vulkan's device count (missing or too old Vulkan loader) no longer aborts the process.
 
 ### Notes
-- Tested on Linux x86_64 with an RTX 4060 Ti (Vulkan) and in containers without a GPU, a Vulkan driver or `libvulkan` (CPU fallback, output identical to the CPU build). The Windows (Vulkan), Linux arm64 (Vulkan) and Apple Silicon (Metal) binaries are built in CI but not yet tested on real hardware.
+- Tested on Linux x86_64 with an RTX 4060 Ti (Vulkan) and in containers without a GPU, a Vulkan driver or `libvulkan` (CPU fallback, output identical to the CPU build). The Windows Vulkan binary was checked on a GitHub runner without `vulkan-1.dll`: it imports no Vulkan DLL, starts, falls back to the CPU and passes the test suite. Windows with a real GPU, Linux arm64 (Vulkan) and Apple Silicon (Metal) are built in CI but not yet tested on real hardware.
 
 ---
 
