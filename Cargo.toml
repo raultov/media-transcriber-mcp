@@ -29,6 +29,15 @@ cognitive_complexity = "warn"
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
 
+[features]
+# CPU-only by default so `cargo install` and the prebuilt installers need no
+# GPU toolchain. Each feature selects a whisper.cpp GPU backend; they need the
+# matching SDK at build time (see README > GPU acceleration).
+default = []
+cuda = ["whisper-rs/cuda"]
+vulkan = ["whisper-rs/vulkan"]
+metal = ["whisper-rs/metal"]
+
 [dependencies]
 rust-mcp-sdk = { version = "0.8.3", features = ["server", "macros"] }
 tokio = { version = "1.37.0", features = ["full"] }

@@ -5,6 +5,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 use crate::audio::TranscribeOptions;
+use crate::audio::backend::GpuSettings;
 use crate::audio::utils::{clean_srt, convert_to_wav};
 use crate::audio::whisper::{
     DEFAULT_MODEL, WhisperModel, default_cache_dir, get_or_download_model,
@@ -351,7 +352,7 @@ async fn run_progress_loop(
 /// The Whisper decode runs for minutes and would otherwise stall the async
 /// runtime, so it is moved to [`tokio::task::spawn_blocking`].
 async fn transcribe_with_whisper(
-    model_path: Option<&Path>,
+    engine: &WhisperEngine,
     req: &TranscribeRequest,
     media_path: &str,
     progress_sender: Option<watch::Sender<i32>>,
@@ -369,8 +370,12 @@ async fn transcribe_with_whisper(
     // neither race on `.part` files nor spawn 32+ threads at once.
     let _whisper_guard = whisper_lock().lock().await;
 
-    let resolved_model = get_or_download_model(model_path, req.model, &default_cache_dir())
-        .map_err(|e| CallToolError::from_message(e.to_string()))?;
+    let resolved_model = get_or_download_model(
+        engine.model_path.as_deref(),
+        req.model,
+        &default_cache_dir(),
+    )
+    .map_err(|e| CallToolError::from_message(e.to_string()))?;
 
     let vad_model = resolve_vad_model(req);
     let start_offset_secs = req.start_ts.as_deref().map_or(0, parse_timestamp_to_secs);
@@ -381,6 +386,10 @@ async fn transcribe_with_whisper(
     let output_format = req.output_format.clone();
     let language = req.language.clone();
     let initial_prompt = req.initial_prompt.clone();
+    let gpu = engine.gpu;
+    // Not capped on the GPU: it made no measurable difference there, and
+    // whisper.cpp may silently decode on the CPU (no device found), where a
+    // cap made a 30 s clip ~3x slower.
     let threads = default_threads();
     let beam_size = 5;
 
@@ -395,6 +404,7 @@ async fn transcribe_with_whisper(
             vad_model_path: vad_model.as_deref(),
             start_offset_secs,
             progress_sender,
+            gpu,
         };
         let wav_path = wav_file
             .path()
@@ -431,13 +441,22 @@ fn resolve_vad_model(req: &TranscribeRequest) -> Option<PathBuf> {
     }
 }
 
+/// Server-wide Whisper settings, fixed at startup from the CLI.
+#[derive(Debug, Clone, Default)]
+pub struct WhisperEngine {
+    /// `WHISPER_MODEL_PATH` override; wins over the per-call `model`.
+    pub model_path: Option<PathBuf>,
+    /// Compute backend for decoding.
+    pub gpu: GpuSettings,
+}
+
 pub async fn handle_transcribe_media(
-    model_path: Option<&std::path::Path>,
+    engine: &WhisperEngine,
     params: CallToolRequestParams,
     sink: Option<Arc<dyn ProgressSink>>,
 ) -> std::result::Result<CallToolResult, CallToolError> {
     let progress_token = params.meta.as_ref().and_then(|m| m.progress_token.clone());
-    let req = parse_request(model_path, params)?;
+    let req = parse_request(engine.model_path.as_deref(), params)?;
     let guard = ProgressGuard::start(progress_token, sink, PROGRESS_HEARTBEAT_INTERVAL);
 
     if let Some(result) = try_remote_subtitles(&req) {
@@ -445,7 +464,7 @@ pub async fn handle_transcribe_media(
     }
 
     let media_path = resolve_media_path(&req)?;
-    let text = transcribe_with_whisper(model_path, &req, &media_path, Some(guard.sender())).await?;
+    let text = transcribe_with_whisper(engine, &req, &media_path, Some(guard.sender())).await?;
     Ok(CallToolResult::text_content(vec![text.into()]))
 }
 
@@ -804,7 +823,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_transcribe_invalid_args() {
         let params = params_from(json!({ "wrong_key": "value" }));
-        let result = handle_transcribe_media(None, params, None).await;
+        let result = handle_transcribe_media(&WhisperEngine::default(), params, None).await;
         assert!(result.is_err());
         if let Err(e) = result {
             assert!(e.0.to_string().contains("Invalid arguments"));
@@ -814,14 +833,14 @@ mod tests {
     #[tokio::test]
     async fn test_handle_transcribe_non_existent_file() {
         let params = params_from(json!({ "file_path": "/non/existent/file.mp4" }));
-        let result = handle_transcribe_media(None, params, None).await;
+        let result = handle_transcribe_media(&WhisperEngine::default(), params, None).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_handle_transcribe_invalid_model() {
         let params = params_from(json!({ "file_path": "a.mp4", "model": "huge" }));
-        let result = handle_transcribe_media(None, params, None).await;
+        let result = handle_transcribe_media(&WhisperEngine::default(), params, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.0.to_string().contains("Unknown model 'huge'"));
@@ -830,7 +849,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_transcribe_invalid_language() {
         let params = params_from(json!({ "file_path": "a.mp4", "language": "spanish" }));
-        let result = handle_transcribe_media(None, params, None).await;
+        let result = handle_transcribe_media(&WhisperEngine::default(), params, None).await;
         assert!(result.is_err());
         assert!(
             result
