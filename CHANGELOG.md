@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 
+## [0.10.0] - 2026-10-24
+
+### Added
+- **The loaded Whisper model is kept in memory between calls** ([#3](https://github.com/raultov/media-transcriber-mcp/issues/3)) instead of being loaded again for every transcription. Only one model is kept: a different `model` (or GPU setting) frees the previous one before loading the new one, so two models never share RAM or VRAM. The server logs `Whisper model: loaded ... in N s` or `reusing ... (already loaded)` on every call.
+- `--model-idle-timeout <SECS>` / `WHISPER_MODEL_IDLE_TIMEOUT` (default `600`, `0` = never) frees the model after that long without calls, counted from the end of the last transcription; a model in use is never freed.
+
+### Notes
+- Measured on Linux with an RTX 4060 Ti and `large-v3-turbo-q5_0` in the file cache, loading takes 0.2 s (GPU) / 0.3 s (CPU), which is what each later call now saves (30 s clip on the GPU: ~1.0–1.1 s per call before, ~0.8–0.9 s after). The gain is small on a warm file cache; the shared model is also the base for parallel chunked transcription ([#4](https://github.com/raultov/media-transcriber-mcp/issues/4)).
+
+---
+
 ## [0.9.1] - 2026-10-24
 
 ### Added
