@@ -1,6 +1,6 @@
 # Media Transcriber MCP
 
-[![Version](https://img.shields.io/badge/version-0.9.1-blue.svg)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.10.0-blue.svg)](Cargo.toml)
 
 An MCP (Model Context Protocol) server that brings video parsing, transcription, and understanding to your AI assistant.
 
@@ -241,6 +241,14 @@ The model is downloaded on first use and cached in `~/.cache/media-transcriber-m
 The default is `large-v3-turbo-q5_0` because the small models replace words they cannot resolve with similarly-sounding nonsense, which is far worse than being slow. Use `base` only for quick drafts of clear, simple audio.
 
 A custom GGML model can be supplied with `WHISPER_MODEL_PATH` (or `--model-path`), which takes precedence over the `model` argument.
+
+**The loaded model stays in memory between calls.** The first transcription loads it (the server logs `Whisper model: loaded ggml-large-v3-turbo-q5_0.bin in 0.2 s`) and later calls reuse it (`Whisper model: reusing ...`). Only one model is kept: asking for a different `model` frees the previous one before loading the new one, so two models never share RAM or VRAM. After 10 minutes without calls the model is freed and the next call loads it again.
+
+| Flag | Env var | Effect |
+|---|---|---|
+| `--model-idle-timeout <SECS>` | `WHISPER_MODEL_IDLE_TIMEOUT=<SECS>` | Seconds without calls before the loaded model is freed (default `600`; `0` keeps it loaded) |
+
+Loading is cheap once the model file is in the operating system's file cache (0.2–0.3 s for `large-v3-turbo-q5_0` on an NVMe disk), so this mostly helps short clips and agents that transcribe long media in several windows.
 
 **Threading.** The decoder uses half the logical CPU count, capped at 16. Whisper is memory-bandwidth bound and SMT siblings make it *slower*: measured on a 16-core/32-thread Ryzen 9 7950X, 16 threads took 104 s for a 5-minute clip while 32 threads took 768–1397 s. Concurrent transcription calls are serialized internally and stream MCP `notifications/progress` updates (every 5 s and on decoder progress ticks) so parallel requests neither thrash CPU threads nor trigger MCP client inactivity timeouts.
 
