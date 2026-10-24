@@ -38,6 +38,14 @@ holds the whole patch; review it with
   a C entry point (called by `whisper_rs::vulkan::list_devices`), and a C++
   exception crossing it aborts the Rust process.
 
+`whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt`:
+
+- The `vulkan-shaders-gen` sub-project builds in `vsg/` and `vsg-b/` at the top
+  of the CMake build tree. Its default location
+  (`ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build`)
+  under Cargo's `OUT_DIR` pushed its try-compile files past Windows' 260-character
+  `MAX_PATH`, and `cl.exe` failed with C1041, so the Windows release build broke.
+
 `build.rs`:
 
 - No longer emits `rustc-link-lib=vulkan` / `vulkan-1`. The Vulkan SDK (headers

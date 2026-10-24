@@ -149,6 +149,13 @@ if (Vulkan_FOUND)
     ExternalProject_Add(
         vulkan-shaders-gen
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders
+        # Patched (media-transcriber-mcp, see vendor/README.md): short
+        # directories at the top of the build tree. The default
+        # ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build
+        # under Cargo's OUT_DIR pushes the sub-build's try-compile files past
+        # Windows' 260-character MAX_PATH, and cl.exe then fails (C1041).
+        PREFIX     ${CMAKE_BINARY_DIR}/vsg
+        BINARY_DIR ${CMAKE_BINARY_DIR}/vsg-b
         CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/$<CONFIG>
                    -DCMAKE_INSTALL_BINDIR=.
                    -DCMAKE_BUILD_TYPE=$<CONFIG>
