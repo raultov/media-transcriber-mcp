@@ -142,7 +142,10 @@ jobs:
     # Let the initial task tell us to not run (currently very blunt)
     needs:
       - plan
-    if: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix.include != null && (needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload') }}
+    # Hand-edited (kept by allow-dirty = ["ci"]): `!cancelled()` and the plan
+    # check replace the implicit success(), which is false on pull requests
+    # because the hand-added preflight job is skipped there.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix.include != null && (needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload') }}
     strategy:
       fail-fast: false
       # Target platforms/runners are computed by dist in create-release.
@@ -227,6 +230,8 @@ jobs:
     needs:
       - plan
       - build-local-artifacts
+    # Hand-added: same reason as build-local-artifacts' condition.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.build-local-artifacts.result == 'success' }}
     runs-on: "ubuntu-22.04"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
