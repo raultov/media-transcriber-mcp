@@ -40,9 +40,9 @@ If a change does not need a release entry (typo, internal refactor), skip step 1
 | Gate | Command |
 |---|---|
 | Formatting | `cargo fmt -- --check` |
-| Lints | `cargo clippy --all-targets --all-features -- -D warnings` |
-| Tests | `cargo test --all-features` |
-| Docs | `cargo doc --no-deps --all-features` |
+| Lints | `cargo clippy --all-targets -- -D warnings` |
+| Tests | `cargo test` |
+| Docs | `cargo doc --no-deps` |
 | Duplication | `cargo dupes check` (must stay at **0%**, see `dupes.toml`) |
 | Packaging | `cargo publish --dry-run --allow-dirty --locked` |
 | Version sync | `package.json` version equals `Cargo.toml`'s |
@@ -51,7 +51,14 @@ If a change does not need a release entry (typo, internal refactor), skip step 1
 make check        # all gates
 make fmt          # auto-format
 make check-all    # make check + the E2E suite (tests/run_all_e2e.sh)
+make check FEATURES=vulkan   # same gates on a GPU build
 ```
+
+**Never run the gates with `--all-features`.** The GPU features (`cuda`,
+`vulkan`, `metal`) each need their own SDK and `metal` only builds on macOS,
+so `--all-features` fails on every machine. The default build is CPU-only and
+must keep working on machines without a GPU; GPU builds must fall back to the
+CPU at run time.
 
 Clippy thresholds live in `clippy.toml`; lint levels in `Cargo.toml`'s `[lints]`
 section. If a function exceeds a threshold (lines, arguments, cognitive
