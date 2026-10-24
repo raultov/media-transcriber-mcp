@@ -170,21 +170,31 @@ async fn main() -> SdkResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::backend::Backend;
+    use crate::audio::backend::{Backend, Reason};
 
     #[test]
     fn test_args_default_to_device_zero() {
         let args = Args::try_parse_from(["media-transcriber-mcp"]).unwrap();
         assert!(!args.no_gpu);
         assert_eq!(args.gpu_device, 0);
-        assert_eq!(args.engine().gpu.uses_gpu(), Backend::compiled().is_gpu());
+        // Whether a GPU build finds a device depends on the host, so only
+        // the build-time half is asserted: a CPU build never uses the GPU.
+        let gpu = args.engine().gpu;
+        assert!(!gpu.uses_gpu() || Backend::compiled().is_gpu());
     }
 
     #[test]
     fn test_args_no_gpu_forces_cpu() {
         let args = Args::try_parse_from(["media-transcriber-mcp", "--no-gpu"]).unwrap();
         assert!(args.no_gpu);
-        assert_eq!(args.engine().gpu, GpuSettings::cpu());
+        let gpu = args.engine().gpu;
+        assert!(!gpu.uses_gpu());
+        let expected = if Backend::compiled().is_gpu() {
+            Reason::Disabled
+        } else {
+            Reason::CpuBuild
+        };
+        assert_eq!(gpu.reason, expected);
     }
 
     #[test]

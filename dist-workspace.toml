@@ -21,6 +21,11 @@ targets = [
 ]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
+# Build every target's archives and installers on pull requests too (uploaded
+# as workflow artifacts, nothing is released): each target has its own GPU
+# toolchain (see .github/scripts/release-gpu-backend.sh), so a PR must prove
+# they all build before a tag is pushed.
+pr-run-mode = "upload"
 # Whether to install an updater program
 install-updater = false
 # The hand-edited jobs (preflight, gates) are kept on regeneration: dist refuses

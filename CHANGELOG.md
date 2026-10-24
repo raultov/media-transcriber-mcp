@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 
+## [0.9.1] - 2026-10-24
+
+### Added
+- **GPU acceleration in the prebuilt binaries** ([#5](https://github.com/raultov/media-transcriber-mcp/issues/5)): the Linux (x86_64, arm64) and Windows release binaries are built with Vulkan, and the Apple Silicon binary with Metal. Every installer (shell, PowerShell, npm, Homebrew) installs that single binary; nothing is chosen at install time. Intel Macs stay CPU-only.
+- **Startup GPU check:** a Vulkan build counts the usable devices before loading a model. Without one it decodes on the CPU with the same settings as a CPU build, so the output is identical, and the startup log says why (`CPU (built with Vulkan, but no usable GPU was found)`, `CPU (GPU device 7 not found; 1 Vulkan device(s) available)`, ...).
+
+### Changed
+- **whisper-rs-sys is vendored and patched** (`vendor/whisper-rs-sys`, see `vendor/README.md`): ggml-vulkan opens the Vulkan loader at run time instead of linking it, so a Vulkan binary also starts on machines without `libvulkan` / `vulkan-1.dll` and runs on the CPU there. The patch only applies to builds from this repository; `cargo install` from crates.io keeps the upstream crate and stays CPU-only by default.
+- The release `gates` job also runs `make test FEATURES=vulkan`, which exercises the CPU fallback on a runner without a GPU.
+- Pull requests now build every target's archives and installers (`pr-run-mode = "upload"`, uploaded as workflow artifacts, nothing is released), so a broken GPU toolchain shows up before a tag is pushed.
+
+### Fixed
+- The Vulkan build on Windows: ggml-vulkan's `vulkan-shaders-gen` sub-build exceeded the 260-character path limit under Cargo's build directory (`cl.exe` error C1041); it now builds in a short directory.
+- A C++ exception from ggml-vulkan's device count (missing or too old Vulkan loader) no longer aborts the process.
+
+### Notes
+- Tested on Linux x86_64 with an RTX 4060 Ti (Vulkan) and in containers without a GPU, a Vulkan driver or `libvulkan` (CPU fallback, output identical to the CPU build). The Windows Vulkan binary was checked on a GitHub runner without `vulkan-1.dll`: it imports no Vulkan DLL, starts, falls back to the CPU and passes the test suite. Windows with a real GPU, Linux arm64 (Vulkan) and Apple Silicon (Metal) are built in CI but not yet tested on real hardware.
+
+---
+
 ## [0.9.0] - 2026-10-24
 
 ### Added
