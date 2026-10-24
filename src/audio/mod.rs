@@ -1,16 +1,18 @@
 pub mod backend;
 pub mod cache;
 pub mod utils;
+pub mod vad;
 pub mod whisper;
 
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperVadParams};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext};
 
 use backend::GpuSettings;
 use cache::{Lookup, ModelCache, ModelKey, Replaced};
+use vad::{SpeechAudio, Timeline};
 
 /// Upper bound on decoder threads.
 ///
@@ -154,7 +156,13 @@ pub fn transcribe_audio(
     ctx: &WhisperContext,
     opts: &TranscribeOptions<'_>,
 ) -> Result<String> {
-    let audio_data = read_wav_samples(wav_path)?;
+    let SpeechAudio {
+        samples: audio_data,
+        timeline,
+    } = speech_samples(read_wav_samples(wav_path)?, opts);
+    if audio_data.is_empty() {
+        return Ok(String::new());
+    }
 
     let mut state = ctx
         .create_state()
@@ -167,7 +175,29 @@ pub fn transcribe_audio(
         .full(params, &audio_data)
         .map_err(|e| anyhow::anyhow!("Failed to run model: {e}"))?;
 
-    collect_segments(&state, opts.output_format, opts.start_offset_secs)
+    collect_segments(
+        &state,
+        opts.output_format,
+        opts.start_offset_secs,
+        &timeline,
+    )
+}
+
+/// Applies VAD when it is enabled, keeping only the speech in `samples`.
+///
+/// A VAD failure degrades quality but must not fail the transcription, so it
+/// is reported and the whole audio is decoded instead.
+fn speech_samples(samples: Vec<f32>, opts: &TranscribeOptions<'_>) -> SpeechAudio {
+    let Some(vad_path) = opts.vad_model_path else {
+        return SpeechAudio::whole(samples);
+    };
+    match vad::keep_speech(vad_path, &samples) {
+        Ok(speech) => speech,
+        Err(e) => {
+            eprintln!("WARNING: {e}; transcribing without VAD");
+            SpeechAudio::whole(samples)
+        }
+    }
 }
 
 /// Returns the model at `model_path` from `cache`, loading it on a miss.
@@ -257,9 +287,9 @@ fn read_wav_samples(wav_path: &str) -> Result<Vec<f32>> {
 
 /// Applies the decoding options to a fresh parameter set.
 ///
-/// The order of the VAD calls matters: whisper.cpp panics if `enable_vad` runs
-/// before the model path is set. The lifetimes are tied together because
-/// `FullParams` borrows the language and prompt strings for its whole life.
+/// VAD is not set here: whisper.cpp ignores it on a `WhisperState` (see
+/// [`vad`]). The lifetimes are tied together because `FullParams` borrows the
+/// language and prompt strings for its whole life.
 fn configure_params<'a>(params: &mut FullParams<'a, 'a>, opts: &TranscribeOptions<'a>) {
     params.set_language(Some(opts.language));
     params.set_n_threads(opts.threads);
@@ -276,23 +306,20 @@ fn configure_params<'a>(params: &mut FullParams<'a, 'a>, opts: &TranscribeOption
     if let Some(prompt) = opts.initial_prompt {
         params.set_initial_prompt(prompt);
     }
-    if let Some(vad_path) = opts.vad_model_path
-        && let Some(vad_str) = vad_path.to_str()
-    {
-        params.set_vad_model_path(Some(vad_str));
-        params.set_vad_params(WhisperVadParams::default());
-        params.enable_vad(true);
-    }
     if let Some(tx) = opts.progress_sender.clone() {
         params.set_progress_callback_safe(move |pct| report_progress(&tx, pct));
     }
 }
 
 /// Renders the decoded segments in the requested output format.
+///
+/// SRT timestamps go through `timeline` first, so they point at the original
+/// audio even when VAD removed the silence before decoding.
 fn collect_segments(
     state: &whisper_rs::WhisperState,
     output_format: &str,
     start_offset_secs: u64,
+    timeline: &Timeline,
 ) -> Result<String> {
     let mut result_text = String::new();
     let mut current_speaker = 1;
@@ -313,8 +340,10 @@ fn collect_segments(
                 result_text.push_str(&format!("[{speaker_label}] {} ", segment.trim()));
             }
             _ => {
-                let t0 = offset_timestamp_ticks(seg.start_timestamp(), start_offset_secs);
-                let t1 = offset_timestamp_ticks(seg.end_timestamp(), start_offset_secs);
+                let (t0, t1) =
+                    timeline.segment_to_original(seg.start_timestamp(), seg.end_timestamp());
+                let t0 = offset_timestamp_ticks(t0, start_offset_secs);
+                let t1 = offset_timestamp_ticks(t1, start_offset_secs);
                 result_text.push_str(&format_srt_segment(
                     seg.segment_index() as usize + 1,
                     t0,

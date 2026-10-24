@@ -91,6 +91,7 @@ src/
   audio/
     mod.rs            TranscribeOptions, decoding, output formatting
     backend.rs        compute backend selection (GPU / CPU fallback)
+    vad.rs            Silero VAD before decoding, timestamp mapping back
     whisper.rs        WhisperModel, model/VAD download and cache
     utils.rs          ffmpeg WAV conversion, SRT helpers
   sources/            yt-dlp downloaders + subtitle fetchers per platform
