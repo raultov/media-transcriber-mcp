@@ -24,7 +24,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the release notes of every version.
 - **Universal Media Support:** Automatically handles video (mp4, mkv, avi, etc.) and audio (mp3, ogg, wav, flac, etc.) using `ffmpeg`.
 - **Zero Configuration:** The server boots instantly without any mandatory environment variables or flags.
 - **Persistent Caching:** Models are stored in `~/.cache/media-transcriber-mcp/` to avoid redownloading across sessions.
-- **Optional GPU acceleration:** Build with `--features cuda`, `vulkan` or `metal` to decode on the GPU. The default build is CPU-only, and GPU builds fall back to the CPU when no GPU is usable. See [GPU acceleration](#gpu-acceleration).
+- **GPU acceleration:** The prebuilt binaries use the GPU when there is one (Vulkan on Linux and Windows, Metal on Apple Silicon) and fall back to the CPU otherwise, with nothing to choose at install time. See [GPU acceleration](#gpu-acceleration).
 - **Customizable:** Optionally specify a custom model path via the `WHISPER_MODEL_PATH` environment variable or the `--model-path` CLI flag.
 
 ## Requirements
@@ -246,40 +246,59 @@ A custom GGML model can be supplied with `WHISPER_MODEL_PATH` (or `--model-path`
 
 ## GPU acceleration
 
-The prebuilt binaries and a plain `cargo install` are **CPU-only** and work on any machine, with or without a GPU. If you have a GPU, you can build with one of the whisper.cpp GPU backends to make decoding much faster:
+The prebuilt binaries (shell, PowerShell, npm and Homebrew installers, and the archives on GitHub Releases) **use the GPU automatically when there is one** and run on the CPU otherwise. There is nothing to choose at install time:
+
+| Platform | Backend in the prebuilt binary |
+|---|---|
+| Linux x86_64 / arm64 | Vulkan (NVIDIA, AMD, Intel) |
+| Windows x86_64 | Vulkan (NVIDIA, AMD, Intel) |
+| macOS Apple Silicon | Metal |
+| macOS Intel | CPU only |
+
+On Linux and Windows the binary does not link the Vulkan loader: it opens it at run time, the way games do. On a machine without a GPU, without GPU drivers or without the Vulkan loader at all (headless servers, minimal containers), it starts normally and decodes on the CPU with exactly the same output as a CPU build. Software renderers such as llvmpipe are ignored. This relies on a small patch to whisper.cpp that only applies to builds from this repository; see [`vendor/README.md`](vendor/README.md).
+
+At startup the server prints what it picked to stderr:
+
+```text
+Whisper backend: Vulkan (device 0)
+Whisper backend: CPU (built with Vulkan, but no usable GPU was found)
+```
+
+| Flag | Env var | Effect |
+|---|---|---|
+| `--no-gpu` | `WHISPER_NO_GPU=true` | Decode on the CPU even when a GPU is available |
+| `--gpu-device <N>` | `WHISPER_GPU_DEVICE=<N>` | GPU to use on multi-GPU machines (default `0`) |
+
+If loading the model on the GPU fails (for example, not enough VRAM), the server logs a warning and retries on the CPU instead of failing the call.
+
+On the GPU, flash attention is turned on. Measured on an RTX 4060 Ti with `large-v3-turbo-q5_0` (5 minutes of Spanish speech, `language: es`):
+
+| Build | Time |
+|---|---|
+| CPU (16 threads, Ryzen 9 7950X) | 154 s |
+| Vulkan, first call (the driver compiles and caches the shaders) | 27 s |
+| Vulkan, later calls | ~8.5 s |
+
+The GPU output is not bit-identical to the CPU output (different floating-point paths); in that test ~98.5% of the words matched, and the differences were punctuation.
+
+### Building it yourself
+
+`cargo install media-transcriber-mcp` builds a **CPU-only** binary. To build with a GPU backend:
 
 | Feature | Hardware | Build prerequisites |
 |---|---|---|
-| `cuda` | NVIDIA | [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (`nvcc` on `PATH`) |
-| `vulkan` | NVIDIA, AMD, Intel (Linux, Windows) | Vulkan headers + `glslc` (Ubuntu/Debian: `sudo apt install libvulkan-dev glslc`; Windows: [Vulkan SDK](https://vulkan.lunarg.com/) with `VULKAN_SDK` set) |
+| `vulkan` | NVIDIA, AMD, Intel (Linux, Windows) | Vulkan headers + `glslc` (Ubuntu/Debian 24.04+: `sudo apt install libvulkan-dev glslc`; Windows: [Vulkan SDK](https://vulkan.lunarg.com/) with `VULKAN_SDK` set) |
 | `metal` | Apple Silicon (macOS) | Xcode command line tools |
+| `cuda` | NVIDIA | [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (`nvcc` on `PATH`) |
 
 You also need `cmake` and a C/C++ compiler, as for the CPU build.
 
 ```bash
-cargo install media-transcriber-mcp --locked --features cuda     # or vulkan / metal
-# from a checkout:
+# from a checkout (uses the patched whisper.cpp, like the release binaries):
 make install FEATURES=vulkan
+# from crates.io (upstream whisper.cpp: a vulkan build then needs libvulkan to start):
+cargo install media-transcriber-mcp --locked --features vulkan   # or metal / cuda
 ```
-
-At startup the server prints the active backend to stderr, e.g. `Whisper backend: CUDA (device 0)`. whisper.cpp also logs the device it picked when the model loads.
-
-**Machines without a GPU.** A GPU build still runs where no GPU is usable: if whisper.cpp finds no device it decodes on the CPU, and if loading the model on the GPU fails (missing driver, not enough VRAM) the server logs a warning and retries on the CPU instead of failing the call. The GPU *runtime libraries* must still be installed for the binary to start (`libvulkan` for `vulkan`, the CUDA runtime for `cuda`). If they are not, use the default CPU build.
-
-| Flag | Env var | Effect |
-|---|---|---|
-| `--no-gpu` | `WHISPER_NO_GPU=true` | Decode on the CPU even in a GPU build |
-| `--gpu-device <N>` | `WHISPER_GPU_DEVICE=<N>` | GPU to use on multi-GPU machines (default `0`) |
-
-On the GPU, flash attention is turned on. Measured with `--features vulkan` on an RTX 4060 Ti with `large-v3-turbo-q5_0` (5 minutes of Spanish speech, `language: es`):
-
-| Build | Time |
-|---|---|
-| Default (CPU, 16 threads, Ryzen 9 7950X) | 154 s |
-| `vulkan`, first call (shaders compiled once) | 27 s |
-| `vulkan`, later calls | ~8.5 s |
-
-The GPU output is not bit-identical to the CPU output (different floating-point paths); in that test ~98.5% of the words matched, and the differences were punctuation.
 
 ## Tips for accurate transcription
 
@@ -325,7 +344,7 @@ Tagging `vX.Y.Z` runs the release workflow: it verifies the tag against `Cargo.t
 - [x] **Native Translation & Subtitling**: Expose Whisper's robust translation feature to seamlessly return translated text or `.srt` subtitles directly to the LLM.
 - [x] **Streaming / Chunked Processing**: Implement pagination/streaming for transcriptions to prevent context window explosion on extremely long audio/video files.
 - [x] **Support for More Sources**: Added Vimeo, Reddit, Twitter/X, Instagram, and TikTok support. All tools accept these URLs with auto-detection via `yt-dlp`. (Note: Instagram requires browser cookies; TikTok may require them in some regions).
-- [ ] **Hardware Acceleration (GPU) Support**: Add custom build flags and packages for native CUDA & Apple Metal support to provide instantaneous transcriptions.
+- [x] **Hardware Acceleration (GPU) Support**: Vulkan and Metal in the prebuilt binaries, with automatic CPU fallback; CUDA when building from source.
 
 ## Credits
 

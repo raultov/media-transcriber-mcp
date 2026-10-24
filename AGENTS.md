@@ -78,21 +78,32 @@ dist-workspace.toml   cargo-dist: installers (shell/powershell/npm/homebrew) and
 Makefile              quality gates
 CHANGELOG.md          release notes (Keep a Changelog)
 .github/
-  workflows/release.yml   release workflow (preflight + gates are hand-edited;
-                          `allow-dirty = ["ci"]` keeps them on regeneration)
+  workflows/release.yml   release workflow (preflight, gates and the GPU
+                          backend step are hand-edited; `allow-dirty = ["ci"]`
+                          keeps them on regeneration)
   scripts/preflight.sh    refuses a tag that mismatches the versions or has no
                           CHANGELOG section
+  scripts/release-gpu-backend.sh
+                          per-target GPU backend for the release binaries
+                          (Vulkan / Metal / none) and the Vulkan toolchain
 src/
   main.rs             CLI + MCP server wiring (stdio)
   audio/
     mod.rs            TranscribeOptions, decoding, output formatting
+    backend.rs        compute backend selection (GPU / CPU fallback)
     whisper.rs        WhisperModel, model/VAD download and cache
     utils.rs          ffmpeg WAV conversion, SRT helpers
   sources/            yt-dlp downloaders + subtitle fetchers per platform
   screenshot/         capture_screenshot, sample_video_scenes
   transcriber/        transcribe_media tool and pipeline
 tests/                E2E suites (optional; `make e2e`)
+vendor/
+  whisper-rs-sys/     patched copy (Vulkan loader opened at run time), wired in
+                      through [patch.crates-io]; see vendor/README.md
 ```
+
+`vendor/` is third-party code: do not refactor or reformat it. Only change it
+to carry a documented patch, and keep `vendor/README.md` in sync.
 
 ## Releasing
 
