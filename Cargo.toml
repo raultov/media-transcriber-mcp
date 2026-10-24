@@ -1,6 +1,6 @@
 [package]
 name = "media-transcriber-mcp"
-version = "0.8.3"
+version = "0.9.0"
 edition = "2024"
 authors = ["raultov <raultov@protonmail.com>"]
 description = "MCP server for transcribing local video and audio files using Whisper"
@@ -28,6 +28,15 @@ cognitive_complexity = "warn"
 # backlog self-cleaning instead of accumulating stale opt-outs.
 allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
+
+[features]
+# CPU-only by default so `cargo install` and the prebuilt installers need no
+# GPU toolchain. Each feature selects a whisper.cpp GPU backend; they need the
+# matching SDK at build time (see README > GPU acceleration).
+default = []
+cuda = ["whisper-rs/cuda"]
+vulkan = ["whisper-rs/vulkan"]
+metal = ["whisper-rs/metal"]
 
 [dependencies]
 rust-mcp-sdk = { version = "0.8.3", features = ["server", "macros"] }

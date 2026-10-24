@@ -1,6 +1,6 @@
 # Media Transcriber MCP
 
-[![Version](https://img.shields.io/badge/version-0.8.1-blue.svg)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](Cargo.toml)
 
 An MCP (Model Context Protocol) server that brings video parsing, transcription, and understanding to your AI assistant.
 
@@ -24,6 +24,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the release notes of every version.
 - **Universal Media Support:** Automatically handles video (mp4, mkv, avi, etc.) and audio (mp3, ogg, wav, flac, etc.) using `ffmpeg`.
 - **Zero Configuration:** The server boots instantly without any mandatory environment variables or flags.
 - **Persistent Caching:** Models are stored in `~/.cache/media-transcriber-mcp/` to avoid redownloading across sessions.
+- **Optional GPU acceleration:** Build with `--features cuda`, `vulkan` or `metal` to decode on the GPU. The default build is CPU-only, and GPU builds fall back to the CPU when no GPU is usable. See [GPU acceleration](#gpu-acceleration).
 - **Customizable:** Optionally specify a custom model path via the `WHISPER_MODEL_PATH` environment variable or the `--model-path` CLI flag.
 
 ## Requirements
@@ -243,6 +244,43 @@ A custom GGML model can be supplied with `WHISPER_MODEL_PATH` (or `--model-path`
 
 **Threading.** The decoder uses half the logical CPU count, capped at 16. Whisper is memory-bandwidth bound and SMT siblings make it *slower*: measured on a 16-core/32-thread Ryzen 9 7950X, 16 threads took 104 s for a 5-minute clip while 32 threads took 768–1397 s. Concurrent transcription calls are serialized internally and stream MCP `notifications/progress` updates (every 5 s and on decoder progress ticks) so parallel requests neither thrash CPU threads nor trigger MCP client inactivity timeouts.
 
+## GPU acceleration
+
+The prebuilt binaries and a plain `cargo install` are **CPU-only** and work on any machine, with or without a GPU. If you have a GPU, you can build with one of the whisper.cpp GPU backends to make decoding much faster:
+
+| Feature | Hardware | Build prerequisites |
+|---|---|---|
+| `cuda` | NVIDIA | [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (`nvcc` on `PATH`) |
+| `vulkan` | NVIDIA, AMD, Intel (Linux, Windows) | Vulkan headers + `glslc` (Ubuntu/Debian: `sudo apt install libvulkan-dev glslc`; Windows: [Vulkan SDK](https://vulkan.lunarg.com/) with `VULKAN_SDK` set) |
+| `metal` | Apple Silicon (macOS) | Xcode command line tools |
+
+You also need `cmake` and a C/C++ compiler, as for the CPU build.
+
+```bash
+cargo install media-transcriber-mcp --locked --features cuda     # or vulkan / metal
+# from a checkout:
+make install FEATURES=vulkan
+```
+
+At startup the server prints the active backend to stderr, e.g. `Whisper backend: CUDA (device 0)`. whisper.cpp also logs the device it picked when the model loads.
+
+**Machines without a GPU.** A GPU build still runs where no GPU is usable: if whisper.cpp finds no device it decodes on the CPU, and if loading the model on the GPU fails (missing driver, not enough VRAM) the server logs a warning and retries on the CPU instead of failing the call. The GPU *runtime libraries* must still be installed for the binary to start (`libvulkan` for `vulkan`, the CUDA runtime for `cuda`). If they are not, use the default CPU build.
+
+| Flag | Env var | Effect |
+|---|---|---|
+| `--no-gpu` | `WHISPER_NO_GPU=true` | Decode on the CPU even in a GPU build |
+| `--gpu-device <N>` | `WHISPER_GPU_DEVICE=<N>` | GPU to use on multi-GPU machines (default `0`) |
+
+On the GPU, flash attention is turned on. Measured with `--features vulkan` on an RTX 4060 Ti with `large-v3-turbo-q5_0` (5 minutes of Spanish speech, `language: es`):
+
+| Build | Time |
+|---|---|
+| Default (CPU, 16 threads, Ryzen 9 7950X) | 154 s |
+| `vulkan`, first call (shaders compiled once) | 27 s |
+| `vulkan`, later calls | ~8.5 s |
+
+The GPU output is not bit-identical to the CPU output (different floating-point paths); in that test ~98.5% of the words matched, and the differences were punctuation.
+
 ## Tips for accurate transcription
 
 1. **Set `language`** whenever you know it. Auto-detection re-runs on every call and wastes accuracy on silence, music or non-speech intros.
@@ -261,7 +299,7 @@ This project uses the same quality gates as the rest of the author's Rust reposi
 make check
 ```
 
-which runs `cargo fmt -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-features`, `cargo doc`, `cargo dupes check` (duplication must stay at **0%**; see `dupes.toml`), `cargo publish --dry-run` and a version-sync check between `Cargo.toml` and `package.json`. Individually:
+which runs `cargo fmt -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `cargo doc`, `cargo dupes check` (duplication must stay at **0%**; see `dupes.toml`), `cargo publish --dry-run` and a version-sync check between `Cargo.toml` and `package.json`. Individually:
 
 ```bash
 make fmt            # auto-format

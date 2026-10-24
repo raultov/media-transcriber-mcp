@@ -79,6 +79,14 @@ jobs:
         run: ffmpeg -version | head -1
       - name: make check
         run: make check
+      # Hand-added: the GPU features are not in the release binaries, so they
+      # are compile-checked here to keep them from bit-rotting. Vulkan is the
+      # only backend whose SDK is a plain apt install on the runner (no GPU is
+      # needed to build it).
+      - name: Install Vulkan headers and shader compiler
+        run: sudo apt-get install -y --no-install-recommends libvulkan-dev glslc
+      - name: Clippy with the vulkan feature
+        run: make clippy FEATURES=vulkan
 
   # Run 'dist plan' (or host) to determine what tasks we need to do
   plan:

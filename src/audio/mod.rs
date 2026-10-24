@@ -1,11 +1,12 @@
+pub mod backend;
 pub mod utils;
 pub mod whisper;
 
 use anyhow::{Context, Result};
 use std::path::Path;
-use whisper_rs::{
-    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperVadParams,
-};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperVadParams};
+
+use backend::GpuSettings;
 
 /// Upper bound on decoder threads.
 ///
@@ -38,6 +39,8 @@ pub struct TranscribeOptions<'a> {
     pub start_offset_secs: u64,
     /// Optional channel receiving decoding progress in percent (`0..=100`).
     pub progress_sender: Option<tokio::sync::watch::Sender<i32>>,
+    /// Compute backend; falls back to the CPU if the GPU cannot be used.
+    pub gpu: GpuSettings,
 }
 
 /// Shifts a Whisper timestamp (in 10 ms ticks) by `start_offset_secs`.
@@ -148,11 +151,7 @@ pub fn transcribe_audio(
 ) -> Result<String> {
     let audio_data = read_wav_samples(wav_path)?;
 
-    let model_str = model_path
-        .to_str()
-        .with_context(|| format!("Model path is not valid UTF-8: {model_path:?}"))?;
-    let ctx = WhisperContext::new_with_params(model_str, WhisperContextParameters::default())
-        .map_err(|e| anyhow::anyhow!("Failed to load model at {model_path:?}: {e}"))?;
+    let ctx = load_context(model_path, opts.gpu)?;
     let mut state = ctx
         .create_state()
         .map_err(|e| anyhow::anyhow!("Failed to create state: {e}"))?;
@@ -165,6 +164,33 @@ pub fn transcribe_audio(
         .map_err(|e| anyhow::anyhow!("Failed to run model: {e}"))?;
 
     collect_segments(&state, opts.output_format, opts.start_offset_secs)
+}
+
+/// Loads the model on the requested backend, retrying on the CPU on failure.
+///
+/// A GPU build must keep working on machines without a usable GPU (no
+/// device, missing driver, too little VRAM), so a GPU load error degrades to
+/// CPU decoding with a warning instead of failing the tool call. whisper.cpp
+/// already falls back on its own when it finds no GPU device at all.
+fn load_context(model_path: &Path, gpu: GpuSettings) -> Result<WhisperContext> {
+    let model_str = model_path
+        .to_str()
+        .with_context(|| format!("Model path is not valid UTF-8: {model_path:?}"))?;
+    let load = |settings: GpuSettings| {
+        WhisperContext::new_with_params(model_str, settings.context_params())
+            .map_err(|e| anyhow::anyhow!("Failed to load model at {model_path:?}: {e}"))
+    };
+
+    match load(gpu) {
+        Err(e) if gpu.uses_gpu() => {
+            eprintln!(
+                "WARNING: {} initialisation failed ({e}); falling back to CPU",
+                gpu.backend.name()
+            );
+            load(GpuSettings::cpu())
+        }
+        result => result,
+    }
 }
 
 /// Loads a WAV file as the float samples whisper.rs expects.
@@ -288,6 +314,7 @@ mod tests {
             vad_model_path: None,
             start_offset_secs: 0,
             progress_sender: None,
+            gpu: GpuSettings::cpu(),
         };
         let result = transcribe_audio(
             "non_existent_file.wav",

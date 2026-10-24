@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 
+## [0.9.0] - 2026-10-24
+
+### Added
+- **Optional GPU acceleration** ([#1](https://github.com/raultov/media-transcriber-mcp/issues/1)): new Cargo features `cuda`, `vulkan` and `metal` select a whisper.cpp GPU backend at build time. On the GPU, flash attention is enabled. A 5-minute clip with `large-v3-turbo-q5_0` went from 154 s (CPU) to ~8.5 s with `vulkan` on an RTX 4060 Ti. The default build and the prebuilt binaries stay CPU-only.
+- **CPU fallback:** if the model cannot be loaded on the GPU, the server logs a warning and retries on the CPU instead of failing the call. whisper.cpp already decodes on the CPU when it finds no GPU device.
+- `--no-gpu` / `WHISPER_NO_GPU` forces CPU decoding in a GPU build; `--gpu-device <N>` / `WHISPER_GPU_DEVICE` picks the GPU on multi-GPU machines.
+- The active backend is printed to stderr at startup (`Whisper backend: ...`).
+
+### Changed
+- The quality gates (`make check`) no longer use `--all-features`, since the GPU features need their own SDKs and `metal` only builds on macOS. Pass `FEATURES=<feature>` to run them on a GPU build. The release `gates` job also runs clippy with `--features vulkan`.
+
+---
+
 ## [0.8.3] - 2026-10-18
 
 ### Fixed
@@ -145,6 +158,17 @@ Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 
 ### Added
 - **YouTube support:** download audio directly by passing a URL or a search query (requires `yt-dlp`).
+
+---
+
+## [0.3.0] - 2026-03-22
+
+### Added
+- **YouTube support:** `transcribe_media` accepts a YouTube URL or a search query and downloads the best audio track with `yt-dlp` before transcribing.
+- Unit tests for Whisper model resolution (`WHISPER_MODEL_PATH` override, missing path, cache discovery).
+
+### Changed
+- README reorganised around a Quick Start (prebuilt binaries, `cargo install`, shell installer).
 
 ---
 

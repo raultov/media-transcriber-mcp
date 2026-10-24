@@ -14,11 +14,12 @@ use rust_mcp_sdk::{
 };
 use std::path::PathBuf;
 
+use crate::audio::backend::GpuSettings;
 use crate::screenshot::{
     CaptureScreenshotTool, SampleVideoScenesTool, handle_capture_screenshot, handle_sample_scenes,
 };
 use crate::transcriber::{
-    PROGRESS_HEARTBEAT_INTERVAL, ProgressGuard, ProgressSink, TranscribeTool,
+    PROGRESS_HEARTBEAT_INTERVAL, ProgressGuard, ProgressSink, TranscribeTool, WhisperEngine,
     handle_transcribe_media,
 };
 
@@ -32,10 +33,27 @@ struct Args {
     /// Path to the Whisper model (GGML format). Optional.
     #[arg(short, long, env = "WHISPER_MODEL_PATH")]
     model_path: Option<PathBuf>,
+
+    /// Decode on the CPU even when the binary was built with a GPU backend.
+    #[arg(long, env = "WHISPER_NO_GPU")]
+    no_gpu: bool,
+
+    /// GPU device index, for machines with more than one GPU.
+    #[arg(long, env = "WHISPER_GPU_DEVICE", default_value_t = 0)]
+    gpu_device: i32,
+}
+
+impl Args {
+    fn engine(&self) -> WhisperEngine {
+        WhisperEngine {
+            model_path: self.model_path.clone(),
+            gpu: GpuSettings::from_flags(self.no_gpu, self.gpu_device),
+        }
+    }
 }
 
 pub struct AppHandler {
-    pub model_path: Option<PathBuf>,
+    pub engine: WhisperEngine,
 }
 
 #[async_trait]
@@ -63,7 +81,7 @@ impl ServerHandler for AppHandler {
     ) -> std::result::Result<CallToolResult, CallToolError> {
         let sink: std::sync::Arc<dyn ProgressSink> = std::sync::Arc::new(runtime);
         if params.name == "transcribe_media" {
-            handle_transcribe_media(self.model_path.as_deref(), params, Some(sink)).await
+            handle_transcribe_media(&self.engine, params, Some(sink)).await
         } else if params.name == "capture_screenshot" {
             let token = params.meta.as_ref().and_then(|m| m.progress_token.clone());
             let _guard = ProgressGuard::start(token, Some(sink), PROGRESS_HEARTBEAT_INTERVAL);
@@ -113,6 +131,8 @@ async fn main() -> SdkResult<()> {
 
     // Initialize without stopping the server if arguments are missing
     let args = Args::parse();
+    let engine = args.engine();
+    eprintln!("Whisper backend: {}", engine.gpu.describe());
 
     let server_details = InitializeResult {
         server_info: Implementation {
@@ -134,10 +154,7 @@ async fn main() -> SdkResult<()> {
 
     let transport = StdioTransport::new(TransportOptions::default())?;
     // Store the model_path but don't validate existence until the tool is called
-    let handler = AppHandler {
-        model_path: args.model_path,
-    }
-    .to_mcp_server_handler();
+    let handler = AppHandler { engine }.to_mcp_server_handler();
 
     let server = server_runtime::create_server(McpServerOptions {
         transport,
@@ -148,4 +165,31 @@ async fn main() -> SdkResult<()> {
     });
 
     server.start().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::backend::Backend;
+
+    #[test]
+    fn test_args_default_to_device_zero() {
+        let args = Args::try_parse_from(["media-transcriber-mcp"]).unwrap();
+        assert!(!args.no_gpu);
+        assert_eq!(args.gpu_device, 0);
+        assert_eq!(args.engine().gpu.uses_gpu(), Backend::compiled().is_gpu());
+    }
+
+    #[test]
+    fn test_args_no_gpu_forces_cpu() {
+        let args = Args::try_parse_from(["media-transcriber-mcp", "--no-gpu"]).unwrap();
+        assert!(args.no_gpu);
+        assert_eq!(args.engine().gpu, GpuSettings::cpu());
+    }
+
+    #[test]
+    fn test_args_gpu_device() {
+        let args = Args::try_parse_from(["media-transcriber-mcp", "--gpu-device", "1"]).unwrap();
+        assert_eq!(args.gpu_device, 1);
+    }
 }
