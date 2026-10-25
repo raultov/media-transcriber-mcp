@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use super::ytdlp::{ytdlp_download_audio, ytdlp_download_subtitles, ytdlp_download_video};
+use crate::audio::transcript::parse_srt_timestamp;
 
 /// Returns `true` when `query` is a YouTube URL or a free-text search query
 /// (i.e. not a local file path and not a Vimeo / other-platform URL).
@@ -67,16 +68,7 @@ pub fn filter_srt_by_range(
     };
 
     fn parse_srt_ts(ts: &str) -> u64 {
-        let ts = ts.trim().replace(',', ".");
-        let parts: Vec<&str> = ts.splitn(3, ':').collect();
-        if parts.len() == 3 {
-            let h: u64 = parts[0].parse().unwrap_or(0);
-            let m: u64 = parts[1].parse().unwrap_or(0);
-            let s: f64 = parts[2].parse().unwrap_or(0.0);
-            h * 3600 + m * 60 + s as u64
-        } else {
-            0
-        }
+        u64::try_from(parse_srt_timestamp(ts) / 100).unwrap_or(0)
     }
 
     let mut result = String::new();

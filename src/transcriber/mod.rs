@@ -7,6 +7,7 @@ use tokio::sync::watch;
 use crate::audio::TranscribeOptions;
 use crate::audio::backend::GpuSettings;
 use crate::audio::cache::{self, SharedModelCache};
+use crate::audio::transcript::{self, OutputFormat};
 use crate::audio::utils::{clean_srt, convert_to_wav};
 use crate::audio::whisper::{
     DEFAULT_MODEL, WhisperModel, default_cache_dir, get_or_download_model,
@@ -29,7 +30,7 @@ use crate::sources::ytdlp::parse_timestamp_to_secs;
 
 #[macros::mcp_tool(
     name = "transcribe_media",
-    description = "Transcribes media to text. PROTOCOL: 1. Start with 'output_format: text' (semantic only, most token-efficient). 2. If you need to track a conversation/debate, use 'text_speakers' (identifies WHO says what). 3. If this is a TECHNICAL talk/tutorial with slides/code, INFORM the user and switch to 'srt' (timestamps) to enable visual mapping with screenshots. 4. Use 'translate' task for non-English audio. QUALITY: pass 'language' when known (skips fragile per-call auto-detection) and 'initial_prompt' with the jargon/acronyms expected in the audio - Whisper has no way to guess 'WebMCP' or 'knot.kz' otherwise. SOURCES: pass a local path, a YouTube URL/search query, a Vimeo URL, a Reddit URL, a Twitter/X URL, an Instagram URL, or a TikTok URL (use 'source: tiktok' etc. or let the server auto-detect from the URL). CHUNKING: chunking does NOT reduce total processing time, it only bounds output size. For long media (>20 min) use 'start_timestamp' (e.g. '00:20:00' or '1200') and 'duration_secs' (e.g. 1200 for 20 min); overlap consecutive windows by ~5 s and drop the duplicated sentences, otherwise words at the boundaries are lost. AUTHENTICATION: For sites like Instagram or private videos, pass 'browser_cookies' (e.g. 'chrome', 'firefox')."
+    description = "Transcribes media to text. PROTOCOL: 1. Start with 'output_format: text' (semantic only, most token-efficient). 2. If this is a TECHNICAL talk/tutorial with slides/code, INFORM the user and switch to 'timestamped_text' (one '[mm:ss] text' line per segment, about 30% smaller than 'srt') to map the text to screenshots; use 'srt' only when exact start/end times are needed. 3. 'text_speakers' only tells speakers apart when the server runs an English '*-tdrz' model through WHISPER_MODEL_PATH; with the bundled models every line is 'Speaker 1', so do not rely on it to identify WHO says what. 4. Use 'translate' task for non-English audio. QUALITY: pass 'language' when known (skips fragile per-call auto-detection) and 'initial_prompt' with the jargon/acronyms expected in the audio - Whisper has no way to guess 'WebMCP' or 'knot.kz' otherwise. SOURCES: pass a local path, a YouTube URL/search query, a Vimeo URL, a Reddit URL, a Twitter/X URL, an Instagram URL, or a TikTok URL (use 'source: tiktok' etc. or let the server auto-detect from the URL). CHUNKING: chunking does NOT reduce total processing time, it only bounds output size. For long media (>20 min) use 'start_timestamp' (e.g. '00:20:00' or '1200') and 'duration_secs' (e.g. 1200 for 20 min); overlap consecutive windows by ~5 s and drop the duplicated sentences, otherwise words at the boundaries are lost. AUTHENTICATION: For sites like Instagram or private videos, pass 'browser_cookies' (e.g. 'chrome', 'firefox')."
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, macros::JsonSchema)]
 pub struct TranscribeTool {
@@ -37,7 +38,7 @@ pub struct TranscribeTool {
     pub file_path: String,
     /// Task to perform: 'transcribe' (default) or 'translate' (directly to English)
     pub task: Option<String>,
-    /// Format of the output: 'text' (pure semantics, default), 'text_speakers' (semantics + speakers), or 'srt' (full context with timestamps)
+    /// Format of the output: 'text' (pure semantics, default), 'timestamped_text' (one line per segment, prefixed with its mm:ss start time), 'srt' (subtitles with start and end times), or 'text_speakers' (speaker turns; needs an English '*-tdrz' model loaded through WHISPER_MODEL_PATH)
     pub output_format: Option<String>,
     /// Chunking: start offset for partial transcription (e.g. "00:20:00" or "1200"). Omit to start from the beginning.
     pub start_timestamp: Option<String>,
@@ -65,7 +66,7 @@ pub struct TranscribeTool {
 struct TranscribeRequest {
     file_path: String,
     task: String,
-    output_format: String,
+    output_format: OutputFormat,
     start_ts: Option<String>,
     duration: Option<u64>,
     cookies: Option<String>,
@@ -142,13 +143,15 @@ fn parse_request(
 
     let language = normalize_language(args.language.as_deref())
         .map_err(|e| CallToolError::from_message(e.to_string()))?;
+    let output_format = OutputFormat::parse(args.output_format.as_deref())
+        .map_err(|e| CallToolError::from_message(e.to_string()))?;
     let initial_prompt = args.initial_prompt.as_deref().and_then(sanitize_prompt);
     let source = MediaSource::detect(&args.file_path, args.source.as_deref());
 
     Ok(TranscribeRequest {
         file_path: args.file_path,
         task: args.task.unwrap_or_else(|| "transcribe".to_string()),
-        output_format: args.output_format.unwrap_or_else(|| "text".to_string()),
+        output_format,
         start_ts: args.start_timestamp,
         duration: args.duration_secs,
         cookies: args.browser_cookies,
@@ -211,13 +214,16 @@ fn render_subtitle_file(req: &TranscribeRequest, srt_path: &Path) -> Option<Call
     let start_secs = req.start_ts.as_deref().map(parse_timestamp_to_secs);
     let content = filter_srt_by_range(&raw_content, start_secs, req.duration);
 
-    match req.output_format.as_str() {
-        "text" => Some(CallToolResult::text_content(vec![
-            clean_srt(&content).into(),
-        ])),
-        "srt" => Some(CallToolResult::text_content(vec![content.into()])),
-        _ => None,
-    }
+    let rendered = match req.output_format {
+        OutputFormat::Text => clean_srt(&content),
+        OutputFormat::Srt => content,
+        OutputFormat::TimestampedText => transcript::render(
+            OutputFormat::TimestampedText,
+            &transcript::parse_srt(&content),
+        ),
+        OutputFormat::TextSpeakers => return None,
+    };
+    Some(CallToolResult::text_content(vec![rendered.into()]))
 }
 
 /// Obtains the media to transcribe: a local path as-is, or a remote download.
@@ -386,7 +392,7 @@ async fn transcribe_with_whisper(
     // Owned copies travel into the blocking closure; `TranscribeOptions` is
     // rebuilt there from them so the closure is `'static`.
     let task = req.task.clone();
-    let output_format = req.output_format.clone();
+    let output_format = req.output_format;
     let language = req.language.clone();
     let initial_prompt = req.initial_prompt.clone();
     let gpu = engine.gpu;
@@ -400,7 +406,7 @@ async fn transcribe_with_whisper(
     let handle = tokio::task::spawn_blocking(move || {
         let opts = TranscribeOptions {
             task: &task,
-            output_format: &output_format,
+            output_format,
             language: &language,
             initial_prompt: initial_prompt.as_deref(),
             beam_size,
@@ -616,7 +622,7 @@ mod tests {
     fn test_parse_request_defaults() {
         let req = request_from(json!({ "file_path": "local.mp4" }));
         assert_eq!(req.task, "transcribe");
-        assert_eq!(req.output_format, "text");
+        assert_eq!(req.output_format, OutputFormat::Text);
         assert_eq!(req.model, DEFAULT_MODEL);
         assert_eq!(req.language, "auto");
         assert_eq!(req.initial_prompt, None);
@@ -687,12 +693,39 @@ mod tests {
         std::fs::write(&srt, "1\n00:00:01,000 --> 00:00:02,000\nHello world\n\n").unwrap();
 
         let mut req = request_from(json!({ "file_path": "x.mp4" }));
-        req.output_format = "text_speakers".to_string();
+        req.output_format = OutputFormat::TextSpeakers;
         assert!(render_subtitle_file(&req, &srt).is_none());
 
-        req.output_format = "srt".to_string();
+        req.output_format = OutputFormat::Srt;
         let served = render_subtitle_file(&req, &srt).expect("srt should be served");
         assert!(text_of(&served).contains("Hello world"));
+    }
+
+    #[test]
+    fn test_render_subtitle_file_timestamped_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let srt = dir.path().join("subs.srt");
+        std::fs::write(
+            &srt,
+            "1\n00:00:01,000 --> 00:00:02,000\nHello world\n\n\
+             2\n00:01:05,000 --> 00:01:07,000\nSecond\nline\n\n",
+        )
+        .unwrap();
+
+        let mut req = request_from(json!({ "file_path": "x.mp4" }));
+        req.output_format = OutputFormat::TimestampedText;
+        let served = render_subtitle_file(&req, &srt).expect("timestamped_text should be served");
+        assert_eq!(text_of(&served), "[00:01] Hello world\n[01:05] Second line");
+    }
+
+    #[test]
+    fn test_parse_request_output_formats() {
+        let req =
+            request_from(json!({ "file_path": "a.mp4", "output_format": "timestamped_text" }));
+        assert_eq!(req.output_format, OutputFormat::TimestampedText);
+        let params = params_from(json!({ "file_path": "a.mp4", "output_format": "json" }));
+        let err = parse_request(None, params).unwrap_err();
+        assert!(err.0.to_string().contains("Invalid output_format 'json'"));
     }
 
     #[test]
@@ -702,7 +735,7 @@ mod tests {
         std::fs::write(&srt, "1\n00:00:01,000 --> 00:00:02,000\nHello world\n\n").unwrap();
 
         let mut req = request_from(json!({ "file_path": "x.mp4" }));
-        req.output_format = "text".to_string();
+        req.output_format = OutputFormat::Text;
         let served = render_subtitle_file(&req, &srt).expect("text should be served");
         assert_eq!(text_of(&served), "Hello world");
     }
