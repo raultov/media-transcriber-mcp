@@ -1,6 +1,6 @@
 # Media Transcriber MCP
 
-[![Version](https://img.shields.io/badge/version-0.10.1-blue.svg)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.11.0-blue.svg)](Cargo.toml)
 
 An MCP (Model Context Protocol) server that brings video parsing, transcription, and understanding to your AI assistant.
 
@@ -17,7 +17,8 @@ See [CHANGELOG.md](CHANGELOG.md) for the release notes of every version.
 - **TikTok Support**: Pass a TikTok video URL and the server will automatically download the video/audio using `yt-dlp`. All three tools support TikTok URLs with auto-detection. Use `browser_cookies` if your region blocks the video.
 - **Multimodal Visual Sampling**: Automatically extracts multiple key frames based on scene changes and sends them to the LLM to provide a complete visual summary of the video.
 - **Screenshot Capture**: Takes screenshots from videos at specific timestamps to provide visual context to the LLM.
-- **Speaker Diarization**: Detects speaker turns and formats transcriptions with speaker tags for clear conversational context.
+- **Compact Timestamps**: `timestamped_text` gives one `[mm:ss] text` line per segment, enough to map a talk to screenshots at about 30 % less output than SRT.
+- **Speaker Diarization**: With an English tinydiarize model (`*-tdrz`, loaded through `WHISPER_MODEL_PATH`), `text_speakers` tags speaker turns. The bundled models do not detect speakers.
 - **Accurate Transcription**: Beam-search decoding, Silero VAD (skips silence, reduces hallucinations) and a `large-v3-turbo` default model that holds up on accents, jargon and technical talks.
 - **Vocabulary Hints**: `initial_prompt` injects domain terms so Whisper transcribes `WebMCP` or `knot.kz` instead of a similarly-sounding word.
 - **Auto-Model Download**: Automatically downloads the required Whisper and VAD models; no manual setup.
@@ -201,10 +202,14 @@ Transcribes a local audio or video file to text. Supports native translation, mu
 - **Arguments:**
   - `file_path` (string, required): The absolute path to the local media file, YouTube URL/search query, Vimeo URL, Reddit URL, Twitter/X URL, Instagram URL, or TikTok URL.
   - `task` (string, optional): The task to perform: `transcribe` (default) or `translate` (directly to English).
-  - `output_format` (string, optional): The format of the output: `text` (plain text, default), `text_speakers` (with speaker turns), or `srt` (with timestamps).
+  - `output_format` (string, optional): The format of the output. An unknown value is rejected.
+    - `text` (default): plain text.
+    - `timestamped_text`: one line per segment, prefixed with its start time, e.g. `[12:40] ¿Y qué pasa con nuestro querido framework?`. Media past the first hour uses `[h:mm:ss]` on every line. Same words as `text`, same segment starts as `srt`; only end times and sub-second precision are left out.
+    - `srt`: SubRip subtitles with start and end times.
+    - `text_speakers`: plain text with `[Speaker N]` turns. Needs an English `*-tdrz` model loaded through `WHISPER_MODEL_PATH`; with the bundled models every line is `Speaker 1`.
   - `source` (string, optional): Source hint — `"youtube"`, `"vimeo"`, `"reddit"`, `"twitter"`, `"instagram"`, or `"tiktok"`. Auto-detected from the URL when omitted.
   - `browser_cookies` (string, optional): Extract cookies from a browser for authentication (e.g., `"chrome"`, `"firefox"`, `"safari"`, `"edge"`). **Required for Instagram**, may be needed for TikTok.
-  - `start_timestamp` (string, optional): Chunking — start offset for partial transcription (e.g. `"00:20:00"` or `"1200"`). Omit to start from the beginning. When `output_format` is `"srt"`, segment timestamps are automatically offset by `start_timestamp` so they match the absolute time in the original media.
+  - `start_timestamp` (string, optional): Chunking — start offset for partial transcription (e.g. `"00:20:00"` or `"1200"`). Omit to start from the beginning. With `"srt"` and `"timestamped_text"`, segment timestamps are automatically offset by `start_timestamp` so they match the absolute time in the original media.
   - `duration_secs` (integer, optional): Chunking — how many seconds to transcribe from `start_timestamp`. Omit to transcribe to the end. For very long files (>20 min), use this together with `start_timestamp` to iterate in windows and avoid context window overflow.
   - `language` (string, optional): Spoken language ISO code (e.g. `"es"`, `"en"`). **Strongly recommended when known.** Defaults to `"auto"`, which re-detects the language on every call from the first seconds of audio and can get it wrong on silence or music.
   - `initial_prompt` (string, optional): Vocabulary hint — jargon, acronyms and proper nouns expected in the audio (e.g. `"WebMCP, knot.kz, chrome-debug, OpenCode"`). Whisper cannot guess terms it has never seen in context, so this is what makes technical talks come out readable.
@@ -274,7 +279,7 @@ Whisper backend: CPU (built with Vulkan, but no usable GPU was found)
 
 | Flag | Env var | Effect |
 |---|---|---|
-| `--no-gpu` | `WHISPER_NO_GPU=true` | Decode on the CPU even when a GPU is available |
+| `--no-gpu` | `WHISPER_NO_GPU=true` (also `1`, `yes`, `on`) | Decode on the CPU even when a GPU is available |
 | `--gpu-device <N>` | `WHISPER_GPU_DEVICE=<N>` | GPU to use on multi-GPU machines (default `0`) |
 
 If loading the model on the GPU fails (for example, not enough VRAM), the server logs a warning and retries on the CPU instead of failing the call.
@@ -316,7 +321,8 @@ cargo install media-transcriber-mcp --locked --features vulkan   # or metal / cu
    { "initial_prompt": "WebMCP, MCP, knot.kz, chrome-debug, OpenCode, Claude Code, HTML, CSS, JavaScript, TypeScript, Angular, LLM, tools" }
    ```
 3. **Leave `vad` on** unless the audio is very noisy. It removes silence and music before decoding, which is where most hallucinated sentences come from.
-4. **Chunking does not save time.** It only bounds output size, because Whisper is linear in duration either way. If you chunk, overlap the windows by ~5 s and drop the duplicated sentences, otherwise words at the boundaries are lost.
+4. **Prefer `timestamped_text` over `srt` for long talks.** On a 42-minute talk it is 28.5 KB against 37.6 KB for SRT (26.1 KB for plain `text`), and it keeps every segment start for `capture_screenshot`.
+5. **Chunking does not save time.** It only bounds output size, because Whisper is linear in duration either way. If you chunk, overlap the windows by ~5 s and drop the duplicated sentences, otherwise words at the boundaries are lost.
 
 ## Testing
 

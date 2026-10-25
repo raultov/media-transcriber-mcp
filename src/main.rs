@@ -38,7 +38,7 @@ struct Args {
     model_path: Option<PathBuf>,
 
     /// Decode on the CPU even when the binary was built with a GPU backend.
-    #[arg(long, env = "WHISPER_NO_GPU")]
+    #[arg(long, env = "WHISPER_NO_GPU", value_parser = env_flag_parser())]
     no_gpu: bool,
 
     /// GPU device index, for machines with more than one GPU.
@@ -49,6 +49,15 @@ struct Args {
     /// memory (RAM or VRAM). The next call loads it again. 0 keeps it loaded.
     #[arg(long, env = "WHISPER_MODEL_IDLE_TIMEOUT", default_value_t = DEFAULT_IDLE_TIMEOUT.as_secs())]
     model_idle_timeout: u64,
+}
+
+/// Parser for boolean flags that can also be set from the environment.
+///
+/// clap only accepts `true` / `false` by default, so `WHISPER_NO_GPU=1`
+/// stopped the server at startup. This also accepts `1`/`0`, `yes`/`no`,
+/// `y`/`n` and `on`/`off`, case-insensitively.
+fn env_flag_parser() -> clap::builder::BoolishValueParser {
+    clap::builder::BoolishValueParser::new()
 }
 
 impl Args {
@@ -207,6 +216,20 @@ mod tests {
             Reason::CpuBuild
         };
         assert_eq!(gpu.reason, expected);
+    }
+
+    #[test]
+    fn test_env_flag_parser_accepts_common_spellings() {
+        use clap::{CommandFactory, builder::TypedValueParser};
+        let cmd = Args::command();
+        let parse = |raw: &str| env_flag_parser().parse_ref(&cmd, None, std::ffi::OsStr::new(raw));
+        for on in ["1", "true", "TRUE", "yes", "y", "on"] {
+            assert!(parse(on).unwrap(), "{on} should enable the flag");
+        }
+        for off in ["0", "false", "no", "n", "off"] {
+            assert!(!parse(off).unwrap(), "{off} should disable the flag");
+        }
+        assert!(parse("maybe").is_err());
     }
 
     #[test]
