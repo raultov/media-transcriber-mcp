@@ -8,6 +8,10 @@ use anyhow::Result;
 
 /// Timestamp ticks (10 ms each) in one hour.
 const TICKS_PER_HOUR: i64 = 360_000;
+/// Pause between two fragments up to which they are still joined (0.5 s).
+const MERGE_MAX_GAP_TICKS: i64 = 50;
+/// Length a merged segment must stay under (15 s).
+const MERGE_MAX_TICKS: i64 = 1_500;
 
 /// The `output_format` of a `transcribe_media` call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +66,47 @@ pub struct Segment {
     pub text: String,
     /// Speaker turn number, starting at 1.
     pub speaker: usize,
+}
+
+/// Joins Whisper fragments back into sentence-sized segments.
+///
+/// Whisper sometimes ends a segment after every word or two. A segment is
+/// appended to the one before it when both have the same speaker, the pause
+/// between them is under [`MERGE_MAX_GAP_TICKS`], the result stays under
+/// [`MERGE_MAX_TICKS`] and the previous one does not end a sentence. Every
+/// word is kept, in order, and each merged segment keeps its first start.
+pub fn merge_fragments(segments: Vec<Segment>) -> Vec<Segment> {
+    let mut merged: Vec<Segment> = Vec::with_capacity(segments.len());
+    for seg in segments {
+        match merged.last_mut() {
+            Some(prev) if continues(prev, &seg) => append(prev, seg),
+            _ => merged.push(seg),
+        }
+    }
+    merged
+}
+
+fn continues(prev: &Segment, next: &Segment) -> bool {
+    prev.speaker == next.speaker
+        && next.t0 - prev.t1 < MERGE_MAX_GAP_TICKS
+        && next.t1 - prev.t0 < MERGE_MAX_TICKS
+        && !ends_sentence(&prev.text)
+}
+
+/// Whether `text` ends in `.`, `?`, `!` or `…`, closing quotes and brackets
+/// aside.
+fn ends_sentence(text: &str) -> bool {
+    text.trim_end()
+        .trim_end_matches(['"', '\'', '”', '’', '»', ')', ']'])
+        .ends_with(['.', '?', '!', '…'])
+}
+
+fn append(prev: &mut Segment, next: Segment) {
+    if !prev.text.ends_with(char::is_whitespace) && !next.text.starts_with(char::is_whitespace) {
+        prev.text.push(' ');
+    }
+    prev.text.push_str(&next.text);
+    prev.t1 = prev.t1.max(next.t1);
 }
 
 /// Renders `segments` in `format`.
@@ -183,6 +228,78 @@ mod tests {
             seg(150, 250, " Hello world.", 1),
             seg(6_520, 7_000, " Second line", 2),
         ]
+    }
+
+    /// One-word fragments as Whisper emits them on a degraded run.
+    fn fragments() -> Vec<Segment> {
+        vec![
+            seg(22_657, 22_660, " Una", 1),
+            seg(22_660, 22_690, " colisión", 1),
+            seg(22_690, 22_700, " de", 1),
+            seg(22_700, 22_700, " nombres.", 1),
+            seg(22_710, 22_740, " Y", 1),
+            seg(22_740, 22_790, " otra", 1),
+        ]
+    }
+
+    #[test]
+    fn test_merge_fragments_restores_sentences() {
+        assert_eq!(
+            merge_fragments(fragments()),
+            vec![
+                seg(22_657, 22_700, " Una colisión de nombres.", 1),
+                seg(22_710, 22_790, " Y otra", 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_merge_fragments_keeps_text_word_for_word() {
+        let words = |s: &[Segment]| {
+            render(OutputFormat::Text, s)
+                .split_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(words(&merge_fragments(fragments())), words(&fragments()));
+    }
+
+    #[test]
+    fn test_merge_fragments_keeps_long_pauses() {
+        let segments = vec![seg(0, 100, " antes", 1), seg(150, 200, " después", 1)];
+        assert_eq!(merge_fragments(segments.clone()), segments);
+    }
+
+    #[test]
+    fn test_merge_fragments_caps_merged_length() {
+        let segments = vec![seg(0, 1_000, " largo", 1), seg(1_000, 1_500, " más", 1)];
+        assert_eq!(merge_fragments(segments.clone()), segments);
+    }
+
+    #[test]
+    fn test_merge_fragments_keeps_speaker_turns() {
+        let segments = vec![seg(0, 100, " hola", 1), seg(100, 200, " qué tal", 2)];
+        assert_eq!(merge_fragments(segments.clone()), segments);
+    }
+
+    #[test]
+    fn test_merge_fragments_adds_a_space_between_glued_words() {
+        let segments = vec![seg(0, 100, "hola", 1), seg(100, 200, "mundo", 1)];
+        assert_eq!(
+            merge_fragments(segments),
+            vec![seg(0, 200, "hola mundo", 1)]
+        );
+    }
+
+    #[test]
+    fn test_ends_sentence() {
+        assert!(ends_sentence(" Fin. "));
+        assert!(ends_sentence(" ¿Seguro?"));
+        assert!(ends_sentence(" Y entonces…"));
+        assert!(ends_sentence(" «Hola.»"));
+        assert!(!ends_sentence(" de"));
+        assert!(!ends_sentence(" uno,"));
+        assert!(!ends_sentence(""));
     }
 
     #[test]
