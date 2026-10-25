@@ -86,6 +86,11 @@ impl Timeline {
         Self::default()
     }
 
+    /// Whether timestamps are left unchanged, i.e. the whole audio is decoded.
+    pub fn is_identity(&self) -> bool {
+        self.spans.is_empty()
+    }
+
     /// Converts a segment's `(t0, t1)` (10 ms ticks) to the original audio.
     ///
     /// Whisper tends to open a segment at the very end of the previous
@@ -281,6 +286,7 @@ mod tests {
 
     #[test]
     fn test_timeline_identity_leaves_ticks_unchanged() {
+        assert!(Timeline::identity().is_identity());
         assert_eq!(
             Timeline::identity().segment_to_original(12_345, 12_400),
             (12_345, 12_400)
@@ -298,6 +304,7 @@ mod tests {
     #[test]
     fn test_timeline_maps_spans_back_to_original_time() {
         let tl = two_span_timeline();
+        assert!(!tl.is_identity());
         assert_eq!(tl.segment_to_original(0, 150), (1_000, 1_150));
         assert_eq!(tl.segment_to_original(210, 410), (6_000, 6_200));
     }

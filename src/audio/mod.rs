@@ -154,7 +154,7 @@ pub fn transcribe_audio(
         .map_err(|e| anyhow::anyhow!("Failed to create state: {e}"))?;
 
     let mut params = FullParams::new(sampling_strategy(opts.beam_size));
-    configure_params(&mut params, opts);
+    configure_params(&mut params, opts, !timeline.is_identity());
 
     state
         .full(params, &audio_data)
@@ -265,12 +265,30 @@ fn read_wav_samples(wav_path: &str) -> Result<Vec<f32>> {
     samples.with_context(|| format!("Failed to read samples from {wav_path}"))
 }
 
+/// Whether each 30 s window is decoded with the text before it as prompt.
+///
+/// Without VAD, that rolling context makes long runs degrade to one or two
+/// words per segment until the end of the file: the fragmented output,
+/// timestamp tokens included, conditions the next window. On a 42-minute
+/// talk, 78% of the segments had two words or fewer with it and 4% without.
+/// whisper.cpp only feeds `initial_prompt` through the same context, so it is
+/// kept when there is a prompt; [`transcript::merge_fragments`] then joins any
+/// fragments back into sentences.
+fn conditions_on_previous_text(vad_applied: bool, has_prompt: bool) -> bool {
+    vad_applied || has_prompt
+}
+
 /// Applies the decoding options to a fresh parameter set.
 ///
 /// VAD is not set here: whisper.cpp ignores it on a `WhisperState` (see
-/// [`vad`]). The lifetimes are tied together because `FullParams` borrows the
-/// language and prompt strings for its whole life.
-fn configure_params<'a>(params: &mut FullParams<'a, 'a>, opts: &TranscribeOptions<'a>) {
+/// [`vad`]); `vad_applied` only tells whether the speech was already cut out.
+/// The lifetimes are tied together because `FullParams` borrows the language
+/// and prompt strings for its whole life.
+fn configure_params<'a>(
+    params: &mut FullParams<'a, 'a>,
+    opts: &TranscribeOptions<'a>,
+    vad_applied: bool,
+) {
     params.set_language(Some(opts.language));
     params.set_n_threads(opts.threads);
     params.set_print_progress(false);
@@ -282,6 +300,11 @@ fn configure_params<'a>(params: &mut FullParams<'a, 'a>, opts: &TranscribeOption
     // off for every other format to avoid feeding a meaningless token in.
     params.set_tdrz_enable(opts.output_format == OutputFormat::TextSpeakers);
     params.set_translate(opts.task == "translate");
+    // `no_context` would not help: it only drops the context left over from
+    // a previous call on the same state.
+    if !conditions_on_previous_text(vad_applied, opts.initial_prompt.is_some()) {
+        params.set_n_max_text_ctx(0);
+    }
 
     if let Some(prompt) = opts.initial_prompt {
         params.set_initial_prompt(prompt);
@@ -294,8 +317,9 @@ fn configure_params<'a>(params: &mut FullParams<'a, 'a>, opts: &TranscribeOption
 /// Renders the decoded segments in the requested output format.
 ///
 /// Timestamps go through `timeline` first, so they point at the original
-/// audio even when VAD removed the silence before decoding. Replacements are
-/// applied per segment, so they never touch a timestamp.
+/// audio even when VAD removed the silence before decoding. Fragments are
+/// merged back into sentences first, then replacements are applied per
+/// segment, so they never touch a timestamp but do match across fragments.
 fn collect_segments(
     state: &whisper_rs::WhisperState,
     opts: &TranscribeOptions<'_>,
@@ -313,7 +337,7 @@ fn collect_segments(
         segments.push(Segment {
             t0: offset_timestamp_ticks(t0, start_offset_secs),
             t1: offset_timestamp_ticks(t1, start_offset_secs),
-            text: opts.replacements.apply(&text),
+            text: text.into_owned(),
             speaker,
         });
         if seg.next_segment_speaker_turn() {
@@ -321,6 +345,10 @@ fn collect_segments(
         }
     }
 
+    let mut segments = transcript::merge_fragments(segments);
+    for seg in &mut segments {
+        seg.text = opts.replacements.apply(&seg.text);
+    }
     Ok(transcript::render(opts.output_format, &segments))
 }
 
@@ -384,6 +412,14 @@ mod tests {
             sampling_strategy(0),
             SamplingStrategy::Greedy { .. }
         ));
+    }
+
+    #[test]
+    fn test_conditions_on_previous_text_only_with_vad_or_prompt() {
+        assert!(!conditions_on_previous_text(false, false));
+        assert!(conditions_on_previous_text(false, true));
+        assert!(conditions_on_previous_text(true, false));
+        assert!(conditions_on_previous_text(true, true));
     }
 
     #[test]

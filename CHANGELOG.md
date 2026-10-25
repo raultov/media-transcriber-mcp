@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 
+## [0.12.1] - 2026-10-25
+
+### Fixed
+- **Long runs without VAD degraded to one or two words per segment** ([#10](https://github.com/raultov/media-transcriber-mcp/issues/10)) and stayed that way until the end of the file. Every 30 s window was decoded with the previous text as its prompt, timestamp tokens included, so once a window came out fragmented the next one copied the pattern. With `vad: false` and no `initial_prompt` the windows are now decoded without that context (`n_max_text_ctx = 0`; the `no_context` flag the issue suggested is already on and only resets state between calls). With an `initial_prompt` the context is kept, because whisper.cpp only passes the prompt through it.
+- **Fragments are joined back into sentences** before formatting. A segment is merged into the previous one when both have the same speaker, the pause between them is under 0.5 s, the result stays under 15 s and the previous one does not end in `.`, `?`, `!` or `…`. Every segment keeps its first start time, and `text` has the same words in the same order. `replacements` now run after the merge, so they also match phrases that Whisper had split across fragments.
+
+### Notes
+- Measured on a 42-minute Spanish talk (`large-v3-turbo-q5_0`, `language: es`, Vulkan): without VAD, the decoder went from 2,126 segments (78% with ≤ 2 words, fragmented from 14:29) to 249 `timestamped_text` lines (0.8% ≤ 2 words, 27.3 KB). With an `initial_prompt` and no VAD it gives 326 lines (3.7%, 28.5 KB); with VAD, 277 lines (0.7%, 27.5 KB).
+- Zero-duration segments and consecutive duplicate lines are not dropped. On that talk the zero-duration segments carried real words ("ahora", "ahí está"), so dropping them would lose text; merging absorbs them into the sentence around them.
+
+---
+
 ## [0.12.0] - 2026-10-25
 
 ### Added
