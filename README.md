@@ -1,6 +1,6 @@
 # Media Transcriber MCP
 
-[![Version](https://img.shields.io/badge/version-0.10.1-blue.svg)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.11.0-blue.svg)](Cargo.toml)
 
 An MCP (Model Context Protocol) server that brings video parsing, transcription, and understanding to your AI assistant.
 

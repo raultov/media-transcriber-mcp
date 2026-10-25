@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 
+## [0.11.0] - 2026-10-25
+
+### Added
+- **`timestamped_text` output format** ([#8](https://github.com/raultov/media-transcriber-mcp/issues/8)): one `[mm:ss] text` line per segment (`[h:mm:ss]` on every line when the media goes past the first hour). It has the same words as `text` and the same segment starts as `srt`, at a fraction of the size. Subtitle tracks downloaded from YouTube and the other platforms are served in this format too, without running Whisper.
+
+### Changed
+- **SRT output no longer prefixes every line with `[Speaker N]`.** Speaker detection only runs for `text_speakers`, so in SRT the label was always `[Speaker 1]`. SRT from Whisper now has the same shape as downloaded subtitle tracks.
+- **An unknown `output_format` is rejected** with an error listing the valid values. It used to fall back to SRT silently, which hid typos.
+- The tool description recommends `timestamped_text` for technical talks, and states that `text_speakers` needs an English `*-tdrz` model loaded through `WHISPER_MODEL_PATH`: none of the bundled models detects speakers.
+
+### Fixed
+- **`WHISPER_NO_GPU=1` stopped the server at startup** (`invalid value '1' for '--no-gpu'`): only `true` / `false` were accepted. It now also accepts `1`/`0`, `yes`/`no`, `y`/`n` and `on`/`off`, case-insensitively.
+
+### Notes
+- Measured on a 42-minute Spanish talk (`large-v3-turbo-q5_0`, VAD on, 339 segments): `srt` 40.7 KB → 37.6 KB, `timestamped_text` 28.5 KB, `text` 26.1 KB.
+
+---
+
 ## [0.10.1] - 2026-10-24
 
 ### Fixed
