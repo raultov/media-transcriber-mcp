@@ -89,8 +89,9 @@ CHANGELOG.md          release notes (Keep a Changelog)
 src/
   main.rs             CLI + MCP server wiring (stdio)
   audio/
-    mod.rs            TranscribeOptions, decoding, output formatting
+    mod.rs            TranscribeOptions, decoding
     backend.rs        compute backend selection (GPU / CPU fallback)
+    transcript.rs     Segment model, output formats, SRT parsing
     vad.rs            Silero VAD before decoding, timestamp mapping back
     whisper.rs        WhisperModel, model/VAD download and cache
     utils.rs          ffmpeg WAV conversion, SRT helpers
