@@ -20,7 +20,8 @@ See [CHANGELOG.md](CHANGELOG.md) for the release notes of every version.
 - **Compact Timestamps**: `timestamped_text` gives one `[mm:ss] text` line per segment, enough to map a talk to screenshots at about 30 % less output than SRT.
 - **Speaker Diarization**: With an English tinydiarize model (`*-tdrz`, loaded through `WHISPER_MODEL_PATH`), `text_speakers` tags speaker turns. The bundled models do not detect speakers.
 - **Accurate Transcription**: Beam-search decoding, Silero VAD (skips silence, reduces hallucinations) and a `large-v3-turbo` default model that holds up on accents, jargon and technical talks.
-- **Vocabulary Hints**: `initial_prompt` injects domain terms so Whisper transcribes `WebMCP` or `knot.kz` instead of a similarly-sounding word.
+- **Vocabulary Hints**: `initial_prompt` injects domain terms so Whisper transcribes `WebMCP` or `knot.kz` instead of a similarly-sounding word, and `replacements` fixes the names it still gets wrong.
+- **Transcripts on Disk**: `output_path` saves the full transcript to a file and returns a short summary, so long media does not overflow the client's tool-result limit.
 - **Auto-Model Download**: Automatically downloads the required Whisper and VAD models; no manual setup.
 - **Universal Media Support:** Automatically handles video (mp4, mkv, avi, etc.) and audio (mp3, ogg, wav, flac, etc.) using `ffmpeg`.
 - **Zero Configuration:** The server boots instantly without any mandatory environment variables or flags.
@@ -215,6 +216,8 @@ Transcribes a local audio or video file to text. Supports native translation, mu
   - `initial_prompt` (string, optional): Vocabulary hint — jargon, acronyms and proper nouns expected in the audio (e.g. `"WebMCP, knot.kz, chrome-debug, OpenCode"`). Whisper cannot guess terms it has never seen in context, so this is what makes technical talks come out readable.
   - `model` (string, optional): `"large-v3-turbo-q5_0"` (default), `"medium"`, `"small"` or `"base"`. See [Models](#models). Ignored when the server was started with `WHISPER_MODEL_PATH`.
   - `vad` (boolean, optional): Run Voice Activity Detection to skip silence/music and reduce hallucinated sentences. Defaults to `true`.
+  - `replacements` (object, optional): Fixes for words Whisper keeps getting wrong, as `{"wrong": "right"}`, e.g. `{"Not.cafeta": "knot.kz", "Raúl Togar": "Raúl Tovar"}`. Matching is literal and case-sensitive; at each position the longest key wins, and replaced text is not matched again. Only the transcript text is changed, never SRT indices or timestamps. A phrase split across two segments is not matched. At most 200 entries; empty keys are rejected.
+  - `output_path` (string, optional): Absolute path of a file to write the full transcript to, in the requested format. Parent directories are created and an existing file is replaced (atomically: readers never see a half-written file). The tool then returns only the path, the line and byte counts and a preview of the first 20 lines (at most 1,500 characters). A relative path or a write error is reported as an error.
 
 ### `capture_screenshot`
 Captures a screenshot from a video file at a specific timestamp, returning it as a Base64-encoded image.
@@ -322,7 +325,9 @@ cargo install media-transcriber-mcp --locked --features vulkan   # or metal / cu
    ```
 3. **Leave `vad` on** unless the audio is very noisy. It removes silence and music before decoding, which is where most hallucinated sentences come from.
 4. **Prefer `timestamped_text` over `srt` for long talks.** On a 42-minute talk it is 28.5 KB against 37.6 KB for SRT (26.1 KB for plain `text`), and it keeps every segment start for `capture_screenshot`.
-5. **Chunking does not save time.** It only bounds output size, because Whisper is linear in duration either way. If you chunk, overlap the windows by ~5 s and drop the duplicated sentences, otherwise words at the boundaries are lost.
+5. **Use `replacements` for names `initial_prompt` did not fix.** Read a first transcript, then call again with e.g. `{"Not.cafeta": "knot.kz"}`. It is deterministic and costs nothing.
+6. **Use `output_path` for media longer than ~20 min** instead of chunking. On a 42-minute talk the tool result drops to 0.7 KB (`srt`) or 1.6 KB (`text`), and the file can be read in pieces.
+7. **Chunking does not save time.** It only bounds output size, because Whisper is linear in duration either way. If you chunk, overlap the windows by ~5 s and drop the duplicated sentences, otherwise words at the boundaries are lost.
 
 ## Testing
 

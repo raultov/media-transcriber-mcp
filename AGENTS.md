@@ -91,6 +91,7 @@ src/
   audio/
     mod.rs            TranscribeOptions, decoding
     backend.rs        compute backend selection (GPU / CPU fallback)
+    replacements.rs   `replacements` argument: literal fixes on transcript text
     transcript.rs     Segment model, output formats, SRT parsing
     vad.rs            Silero VAD before decoding, timestamp mapping back
     whisper.rs        WhisperModel, model/VAD download and cache
@@ -98,6 +99,7 @@ src/
   sources/            yt-dlp downloaders + subtitle fetchers per platform
   screenshot/         capture_screenshot, sample_video_scenes
   transcriber/        transcribe_media tool and pipeline
+    output.rs         `output_path`: atomic write and summary
 tests/                E2E suites (optional; `make e2e`)
 vendor/
   whisper-rs-sys/     patched copy (Vulkan loader opened at run time), wired in
