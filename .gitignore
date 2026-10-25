@@ -18,6 +18,8 @@ proxy.json
 .gemini/
 # Local knot indexer state
 .knot/
+# JetBrains project files
+.idea/
 
 # Media
 *.mp4
