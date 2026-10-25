@@ -4,9 +4,12 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+mod output;
+
 use crate::audio::TranscribeOptions;
 use crate::audio::backend::GpuSettings;
 use crate::audio::cache::{self, SharedModelCache};
+use crate::audio::replacements::{ReplacementMap, Replacements};
 use crate::audio::transcript::{self, OutputFormat};
 use crate::audio::utils::{clean_srt, convert_to_wav};
 use crate::audio::whisper::{
@@ -30,7 +33,7 @@ use crate::sources::ytdlp::parse_timestamp_to_secs;
 
 #[macros::mcp_tool(
     name = "transcribe_media",
-    description = "Transcribes media to text. PROTOCOL: 1. Start with 'output_format: text' (semantic only, most token-efficient). 2. If this is a TECHNICAL talk/tutorial with slides/code, INFORM the user and switch to 'timestamped_text' (one '[mm:ss] text' line per segment, about 30% smaller than 'srt') to map the text to screenshots; use 'srt' only when exact start/end times are needed. 3. 'text_speakers' only tells speakers apart when the server runs an English '*-tdrz' model through WHISPER_MODEL_PATH; with the bundled models every line is 'Speaker 1', so do not rely on it to identify WHO says what. 4. Use 'translate' task for non-English audio. QUALITY: pass 'language' when known (skips fragile per-call auto-detection) and 'initial_prompt' with the jargon/acronyms expected in the audio - Whisper has no way to guess 'WebMCP' or 'knot.kz' otherwise. SOURCES: pass a local path, a YouTube URL/search query, a Vimeo URL, a Reddit URL, a Twitter/X URL, an Instagram URL, or a TikTok URL (use 'source: tiktok' etc. or let the server auto-detect from the URL). CHUNKING: chunking does NOT reduce total processing time, it only bounds output size. For long media (>20 min) use 'start_timestamp' (e.g. '00:20:00' or '1200') and 'duration_secs' (e.g. 1200 for 20 min); overlap consecutive windows by ~5 s and drop the duplicated sentences, otherwise words at the boundaries are lost. AUTHENTICATION: For sites like Instagram or private videos, pass 'browser_cookies' (e.g. 'chrome', 'firefox')."
+    description = "Transcribes media to text. PROTOCOL: 1. Start with 'output_format: text' (semantic only, most token-efficient). 2. If this is a TECHNICAL talk/tutorial with slides/code, INFORM the user and switch to 'timestamped_text' (one '[mm:ss] text' line per segment, about 30% smaller than 'srt') to map the text to screenshots; use 'srt' only when exact start/end times are needed. 3. 'text_speakers' only tells speakers apart when the server runs an English '*-tdrz' model through WHISPER_MODEL_PATH; with the bundled models every line is 'Speaker 1', so do not rely on it to identify WHO says what. 4. Use 'translate' task for non-English audio. QUALITY: pass 'language' when known (skips fragile per-call auto-detection) and 'initial_prompt' with the jargon/acronyms expected in the audio - Whisper has no way to guess 'WebMCP' or 'knot.kz' otherwise. If a proper noun still comes out wrong, call again with 'replacements' (e.g. {'Not.cafeta': 'knot.kz'}): literal, case-sensitive fixes applied to the transcript text. LONG MEDIA: pass 'output_path' (an absolute file path) for media longer than ~20 min; the full transcript is saved there and only a summary with the first lines is returned, so read the file in pieces instead of chunking. SOURCES: pass a local path, a YouTube URL/search query, a Vimeo URL, a Reddit URL, a Twitter/X URL, an Instagram URL, or a TikTok URL (use 'source: tiktok' etc. or let the server auto-detect from the URL). CHUNKING: chunking does NOT reduce total processing time, it only bounds output size. If 'output_path' is not an option, for long media (>20 min) use 'start_timestamp' (e.g. '00:20:00' or '1200') and 'duration_secs' (e.g. 1200 for 20 min); overlap consecutive windows by ~5 s and drop the duplicated sentences, otherwise words at the boundaries are lost. AUTHENTICATION: For sites like Instagram or private videos, pass 'browser_cookies' (e.g. 'chrome', 'firefox')."
 )]
 #[derive(Debug, ::serde::Deserialize, ::serde::Serialize, macros::JsonSchema)]
 pub struct TranscribeTool {
@@ -56,6 +59,10 @@ pub struct TranscribeTool {
     pub initial_prompt: Option<String>,
     /// Optional: run Voice Activity Detection to skip silence and reduce hallucinations. Defaults to true.
     pub vad: Option<bool>,
+    /// Optional fixes for words Whisper keeps getting wrong, as an object {"wrong": "right"} (e.g. {"Not.cafeta": "knot.kz", "Raúl Togar": "Raúl Tovar"}). Literal and case-sensitive; the longest match wins. Applied to the text only, never to timestamps. A phrase split across two segments is not matched.
+    pub replacements: Option<ReplacementMap>,
+    /// Optional absolute file path. The full transcript, in the requested format, is written there (parent directories are created, an existing file is replaced) and the result only has the path, its size and the first lines. Recommended for media longer than ~20 min.
+    pub output_path: Option<String>,
 }
 
 /// A parsed and validated `transcribe_media` request.
@@ -75,6 +82,8 @@ struct TranscribeRequest {
     language: String,
     initial_prompt: Option<String>,
     vad: bool,
+    replacements: Replacements,
+    output_path: Option<PathBuf>,
 }
 
 /// Resolved media source after auto-detection.
@@ -147,6 +156,14 @@ fn parse_request(
         .map_err(|e| CallToolError::from_message(e.to_string()))?;
     let initial_prompt = args.initial_prompt.as_deref().and_then(sanitize_prompt);
     let source = MediaSource::detect(&args.file_path, args.source.as_deref());
+    let replacements = Replacements::new(&args.replacements.unwrap_or_default())
+        .map_err(|e| CallToolError::from_message(e.to_string()))?;
+    let output_path = args
+        .output_path
+        .as_deref()
+        .map(output::parse_output_path)
+        .transpose()
+        .map_err(|e| CallToolError::from_message(e.to_string()))?;
 
     Ok(TranscribeRequest {
         file_path: args.file_path,
@@ -161,6 +178,8 @@ fn parse_request(
         initial_prompt,
         // VAD is on by default; only an explicit `false` disables it.
         vad: args.vad.unwrap_or(true),
+        replacements,
+        output_path,
     })
 }
 
@@ -169,7 +188,7 @@ fn parse_request(
 /// Returns `Some` when the request is fully served and `None` when the caller
 /// should fall through to the Whisper path (no track available, or the format
 /// needs diarization).
-fn try_remote_subtitles(req: &TranscribeRequest) -> Option<CallToolResult> {
+fn try_remote_subtitles(req: &TranscribeRequest) -> Option<String> {
     if req.task != "transcribe" {
         return None;
     }
@@ -201,8 +220,9 @@ fn try_remote_subtitles(req: &TranscribeRequest) -> Option<CallToolResult> {
 /// Turns a downloaded SRT file into the requested output format.
 ///
 /// `text_speakers` deliberately falls through to Whisper because a subtitle
-/// track carries no speaker information.
-fn render_subtitle_file(req: &TranscribeRequest, srt_path: &Path) -> Option<CallToolResult> {
+/// track carries no speaker information. Replacements go to the text lines
+/// before any conversion, so they reach every format the same way.
+fn render_subtitle_file(req: &TranscribeRequest, srt_path: &Path) -> Option<String> {
     let raw_content = match std::fs::read_to_string(srt_path) {
         Ok(c) => c,
         Err(e) => {
@@ -212,7 +232,9 @@ fn render_subtitle_file(req: &TranscribeRequest, srt_path: &Path) -> Option<Call
     };
 
     let start_secs = req.start_ts.as_deref().map(parse_timestamp_to_secs);
-    let content = filter_srt_by_range(&raw_content, start_secs, req.duration);
+    let content =
+        req.replacements
+            .apply_to_srt(&filter_srt_by_range(&raw_content, start_secs, req.duration));
 
     let rendered = match req.output_format {
         OutputFormat::Text => clean_srt(&content),
@@ -223,7 +245,7 @@ fn render_subtitle_file(req: &TranscribeRequest, srt_path: &Path) -> Option<Call
         ),
         OutputFormat::TextSpeakers => return None,
     };
-    Some(CallToolResult::text_content(vec![rendered.into()]))
+    Some(rendered)
 }
 
 /// Obtains the media to transcribe: a local path as-is, or a remote download.
@@ -395,6 +417,7 @@ async fn transcribe_with_whisper(
     let output_format = req.output_format;
     let language = req.language.clone();
     let initial_prompt = req.initial_prompt.clone();
+    let replacements = req.replacements.clone();
     let gpu = engine.gpu;
     let models = Arc::clone(&engine.models);
     // Not capped on the GPU: it made no measurable difference there, and
@@ -409,6 +432,7 @@ async fn transcribe_with_whisper(
             output_format,
             language: &language,
             initial_prompt: initial_prompt.as_deref(),
+            replacements: &replacements,
             beam_size,
             threads,
             vad_model_path: vad_model.as_deref(),
@@ -460,7 +484,7 @@ pub struct WhisperEngine {
     pub model_path: Option<PathBuf>,
     /// Compute backend for decoding.
     pub gpu: GpuSettings,
-    /// Loaded model, reused across calls (see [`crate::audio::cache`]).
+    /// Loaded model, reused across calls (see [`cache`]).
     pub models: SharedModelCache<whisper_rs::WhisperContext>,
 }
 
@@ -473,13 +497,29 @@ pub async fn handle_transcribe_media(
     let req = parse_request(engine.model_path.as_deref(), params)?;
     let guard = ProgressGuard::start(progress_token, sink, PROGRESS_HEARTBEAT_INTERVAL);
 
-    if let Some(result) = try_remote_subtitles(&req) {
-        return Ok(result);
-    }
+    let text = match try_remote_subtitles(&req) {
+        Some(text) => text,
+        None => {
+            let media_path = resolve_media_path(&req)?;
+            transcribe_with_whisper(engine, &req, &media_path, Some(guard.sender())).await?
+        }
+    };
+    deliver(&req, &text)
+}
 
-    let media_path = resolve_media_path(&req)?;
-    let text = transcribe_with_whisper(engine, &req, &media_path, Some(guard.sender())).await?;
-    Ok(CallToolResult::text_content(vec![text.into()]))
+/// Returns the transcript, or writes it to `output_path` and returns a
+/// summary. A write failure is an error: falling back to the full text would
+/// hand the client the very output it asked to keep out of the result.
+fn deliver(
+    req: &TranscribeRequest,
+    text: &str,
+) -> std::result::Result<CallToolResult, CallToolError> {
+    let Some(path) = req.output_path.as_deref() else {
+        return Ok(CallToolResult::text_content(vec![text.to_string().into()]));
+    };
+    output::write_transcript(path, text).map_err(|e| CallToolError::from_message(e.to_string()))?;
+    let summary = output::summary(path, req.output_format, text);
+    Ok(CallToolResult::text_content(vec![summary.into()]))
 }
 
 #[cfg(test)]
@@ -628,6 +668,94 @@ mod tests {
         assert_eq!(req.initial_prompt, None);
         assert!(req.vad, "VAD should default to enabled");
         assert!(matches!(req.source, MediaSource::Local));
+        assert!(req.replacements.is_empty());
+        assert_eq!(req.output_path, None);
+    }
+
+    #[test]
+    fn test_parse_request_post_processing_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("talk.txt");
+        let req = request_from(json!({
+            "file_path": "a.mp4",
+            "replacements": { "Not.cafeta": "knot.kz" },
+            "output_path": out.to_str().unwrap()
+        }));
+        assert_eq!(req.replacements.apply("Not.cafeta"), "knot.kz");
+        assert_eq!(req.output_path, Some(out));
+    }
+
+    #[test]
+    fn test_parse_request_rejects_bad_post_processing_arguments() {
+        let relative = params_from(json!({ "file_path": "a.mp4", "output_path": "talk.txt" }));
+        let err = parse_request(None, relative).unwrap_err();
+        assert!(err.0.to_string().contains("use an absolute path"));
+
+        let empty_key = params_from(json!({ "file_path": "a.mp4", "replacements": { "": "x" } }));
+        let err = parse_request(None, empty_key).unwrap_err();
+        assert!(err.0.to_string().contains("keys must not be empty"));
+
+        let not_strings = params_from(json!({ "file_path": "a.mp4", "replacements": ["x"] }));
+        assert!(parse_request(None, not_strings).is_err());
+    }
+
+    #[test]
+    fn test_render_subtitle_file_applies_replacements_to_text_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let srt = dir.path().join("subs.srt");
+        std::fs::write(&srt, "1\n00:00:01,000 --> 00:00:02,000\nNot.cafeta 1\n\n").unwrap();
+
+        let mut req = request_from(json!({
+            "file_path": "x.mp4",
+            "output_format": "srt",
+            "replacements": { "Not.cafeta": "knot.kz", "1": "one" }
+        }));
+        let served = render_subtitle_file(&req, &srt).unwrap();
+        assert_eq!(served, "1\n00:00:01,000 --> 00:00:02,000\nknot.kz one\n\n");
+
+        req.output_format = OutputFormat::TimestampedText;
+        assert_eq!(
+            render_subtitle_file(&req, &srt).unwrap(),
+            "[00:01] knot.kz one"
+        );
+    }
+
+    #[test]
+    fn test_deliver_returns_the_text_without_output_path() {
+        let req = request_from(json!({ "file_path": "a.mp4" }));
+        let result = deliver(&req, "Hola mundo").unwrap();
+        assert_eq!(text_of(&result), "Hola mundo");
+    }
+
+    #[test]
+    fn test_deliver_writes_output_path_and_returns_a_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("nested").join("talk.txt");
+        let req = request_from(json!({
+            "file_path": "a.mp4",
+            "output_format": "timestamped_text",
+            "output_path": out.to_str().unwrap()
+        }));
+        let result = deliver(&req, "[00:01] Hola\n[00:05] mundo").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&out).unwrap(),
+            "[00:01] Hola\n[00:05] mundo"
+        );
+        let summary = text_of(&result);
+        assert!(summary.contains("format: timestamped_text, 2 lines"));
+        assert!(summary.ends_with("[00:01] Hola\n[00:05] mundo"));
+    }
+
+    #[test]
+    fn test_deliver_reports_write_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("file");
+        std::fs::write(&blocker, "x").unwrap();
+        let req = request_from(json!({
+            "file_path": "a.mp4",
+            "output_path": blocker.join("talk.txt").to_str().unwrap()
+        }));
+        assert!(deliver(&req, "text").is_err());
     }
 
     #[test]
@@ -698,7 +826,7 @@ mod tests {
 
         req.output_format = OutputFormat::Srt;
         let served = render_subtitle_file(&req, &srt).expect("srt should be served");
-        assert!(text_of(&served).contains("Hello world"));
+        assert!(served.contains("Hello world"));
     }
 
     #[test]
@@ -715,7 +843,7 @@ mod tests {
         let mut req = request_from(json!({ "file_path": "x.mp4" }));
         req.output_format = OutputFormat::TimestampedText;
         let served = render_subtitle_file(&req, &srt).expect("timestamped_text should be served");
-        assert_eq!(text_of(&served), "[00:01] Hello world\n[01:05] Second line");
+        assert_eq!(served, "[00:01] Hello world\n[01:05] Second line");
     }
 
     #[test]
@@ -737,7 +865,7 @@ mod tests {
         let mut req = request_from(json!({ "file_path": "x.mp4" }));
         req.output_format = OutputFormat::Text;
         let served = render_subtitle_file(&req, &srt).expect("text should be served");
-        assert_eq!(text_of(&served), "Hello world");
+        assert_eq!(served, "Hello world");
     }
 
     #[test]

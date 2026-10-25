@@ -39,6 +39,16 @@ impl OutputFormat {
             ),
         }
     }
+
+    /// The name callers pass as `output_format`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::TextSpeakers => "text_speakers",
+            Self::Srt => "srt",
+            Self::TimestampedText => "timestamped_text",
+        }
+    }
 }
 
 /// A piece of transcript with its place in the original media.
@@ -188,6 +198,18 @@ mod tests {
             OutputFormat::parse(Some("text_speakers")).unwrap(),
             OutputFormat::TextSpeakers
         );
+    }
+
+    #[test]
+    fn test_output_format_name_round_trips() {
+        for format in [
+            OutputFormat::Text,
+            OutputFormat::TextSpeakers,
+            OutputFormat::Srt,
+            OutputFormat::TimestampedText,
+        ] {
+            assert_eq!(OutputFormat::parse(Some(format.name())).unwrap(), format);
+        }
     }
 
     #[test]
