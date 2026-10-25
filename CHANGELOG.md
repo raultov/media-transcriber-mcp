@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Release notes live **here**, not in `README.md`. See `AGENTS.md` for the rule.
 
+## [0.12.0] - 2026-10-25
+
+### Added
+- **`replacements` parameter** ([#9](https://github.com/raultov/media-transcriber-mcp/issues/9)): a `{"wrong": "right"}` object of literal, case-sensitive fixes applied to the transcript text, for names `initial_prompt` did not fix (`{"Not.cafeta": "knot.kz"}`). The longest key wins and replaced text is not matched again, so the result does not depend on the order of the map. SRT indices and timestamps are never touched. It works on Whisper output and downloaded subtitle tracks alike. At most 200 entries; empty keys are rejected.
+- **`output_path` parameter** ([#9](https://github.com/raultov/media-transcriber-mcp/issues/9)): writes the full transcript, in the requested format, to an absolute file path (creating parent directories, replacing an existing file atomically) and returns only the path, line and byte counts and a preview of the first 20 lines. A relative path or a write error is an error; the server never falls back to returning the whole transcript.
+
+### Changed
+- `base64` 0.22 → 0.23 (encodes the images returned by `capture_screenshot` and `sample_video_scenes`).
+
+### Notes
+- Measured on a 42-minute Spanish talk: with `output_path` the tool result is 0.7 KB for `srt` (37.6 KB file) and 1.6 KB for `text` (26.1 KB file). Without either parameter the output is byte-for-byte identical to 0.11.0.
+
+---
+
 ## [0.11.0] - 2026-10-25
 
 ### Added

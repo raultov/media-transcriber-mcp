@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod cache;
+pub mod replacements;
 pub mod transcript;
 pub mod utils;
 pub mod vad;
@@ -13,6 +14,7 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext};
 
 use backend::GpuSettings;
 use cache::{Lookup, ModelCache, ModelKey, Replaced};
+use replacements::Replacements;
 use transcript::{OutputFormat, Segment};
 use vad::{SpeechAudio, Timeline};
 
@@ -35,6 +37,8 @@ pub struct TranscribeOptions<'a> {
     pub language: &'a str,
     /// Vocabulary hint: jargon, acronyms and proper nouns expected in the audio.
     pub initial_prompt: Option<&'a str>,
+    /// Substitutions applied to every segment's text after decoding.
+    pub replacements: &'a Replacements,
     /// Beam width. `1` selects greedy decoding.
     pub beam_size: i32,
     /// Decoder threads.
@@ -156,12 +160,7 @@ pub fn transcribe_audio(
         .full(params, &audio_data)
         .map_err(|e| anyhow::anyhow!("Failed to run model: {e}"))?;
 
-    collect_segments(
-        &state,
-        opts.output_format,
-        opts.start_offset_secs,
-        &timeline,
-    )
+    collect_segments(&state, opts, &timeline)
 }
 
 /// Applies VAD when it is enabled, keeping only the speech in `samples`.
@@ -295,13 +294,14 @@ fn configure_params<'a>(params: &mut FullParams<'a, 'a>, opts: &TranscribeOption
 /// Renders the decoded segments in the requested output format.
 ///
 /// Timestamps go through `timeline` first, so they point at the original
-/// audio even when VAD removed the silence before decoding.
+/// audio even when VAD removed the silence before decoding. Replacements are
+/// applied per segment, so they never touch a timestamp.
 fn collect_segments(
     state: &whisper_rs::WhisperState,
-    output_format: OutputFormat,
-    start_offset_secs: u64,
+    opts: &TranscribeOptions<'_>,
     timeline: &Timeline,
 ) -> Result<String> {
+    let start_offset_secs = opts.start_offset_secs;
     let mut segments = Vec::new();
     let mut speaker = 1;
 
@@ -313,7 +313,7 @@ fn collect_segments(
         segments.push(Segment {
             t0: offset_timestamp_ticks(t0, start_offset_secs),
             t1: offset_timestamp_ticks(t1, start_offset_secs),
-            text: text.into_owned(),
+            text: opts.replacements.apply(&text),
             speaker,
         });
         if seg.next_segment_speaker_turn() {
@@ -321,7 +321,7 @@ fn collect_segments(
         }
     }
 
-    Ok(transcript::render(output_format, &segments))
+    Ok(transcript::render(opts.output_format, &segments))
 }
 
 #[cfg(test)]
